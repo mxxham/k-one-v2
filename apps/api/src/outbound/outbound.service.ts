@@ -331,6 +331,251 @@ export class OutboundService {
     };
   }
 
+  /**
+   * pickItems — spec §1.6 (docs/spec-2-outbound-picklist-bintransfer.md).
+   * Only writer of outbound_item_locations + Reserved stock_locations + a picklist.
+   * Does NOT write ledger (that happens in `ship`) and does NOT decrement stock.quantity.
+   * Requires order status 'Open'. Supports re-pick (clears prior allocations for the items first).
+   *
+   * NOTE: the source PHP spec mentions `outbound_orders.picked_by/picked_at`, but the ported
+   * schema (001-schema.sql, S2) has no such columns on outbound_orders — that bookkeeping lives
+   * on `picklists`/`picklist_items` instead, so this only sets order status here.
+   */
+  async pickItems(outboundId: number, itemIds: number[], pickerId: number | null): Promise<void> {
+    const order = await this.getById(outboundId);
+    if (!order) throw ApiException.notFound('Outbound tidak ditemukan');
+    if (order.status !== 'Open') {
+      throw ApiException.conflict('Hanya order berstatus Open yang bisa di-pick');
+    }
+
+    await this.db.transaction(async (client) => {
+      const itemsR = await client.query(
+        `SELECT oi.*, p.uom_per_pallet as product_upp
+         FROM outbound_items oi
+         JOIN products p ON oi.product_id = p.id
+         WHERE oi.outbound_order_id = $1 ${itemIds.length ? 'AND oi.id = ANY($2::bigint[])' : ''}
+         ORDER BY oi.id`,
+        itemIds.length ? [outboundId, itemIds] : [outboundId],
+      );
+      const items = itemsR.rows;
+      if (items.length === 0) throw ApiException.badRequest('Tidak ada item untuk di-pick.');
+
+      // Re-pick support: drop any previous allocations for these items before re-allocating.
+      const idList = items.map((it: any) => Number(it.id));
+      await client.query('DELETE FROM outbound_item_locations WHERE outbound_item_id = ANY($1::bigint[])', [idList]);
+
+      const existingPicklist = await client.query(
+        `SELECT id FROM picklists WHERE outbound_order_id = $1 AND status IN ('Draft','Confirmed','Picking') ORDER BY id DESC LIMIT 1`,
+        [outboundId],
+      );
+      let picklistId: number;
+      if (existingPicklist.rows.length > 0) {
+        picklistId = Number(existingPicklist.rows[0].id);
+      } else {
+        const picklistNumber = await generateNumber(this.db, {
+          table: 'picklists',
+          column: 'picklist_number',
+          prefix: `PKL-${todayStr().slice(0, 7).replace('-', '')}-`,
+          searchPrefix: `PKL-${todayStr().slice(0, 7).replace('-', '')}-`,
+          pad: 4,
+        });
+        const ins = await client.query(
+          `INSERT INTO picklists (outbound_order_id, picklist_number, created_date, status, created_by, confirmed_at)
+           VALUES ($1,$2,$3,'Confirmed',$4,NOW()) RETURNING id`,
+          [outboundId, picklistNumber, todayStr(), pickerId],
+        );
+        picklistId = Number(ins.rows[0].id);
+      }
+
+      for (const item of items) {
+        const productId = Number(item.product_id);
+        const needed = Number(item.quantity ?? 0);
+        if (needed <= 0) continue;
+
+        const params: unknown[] = [productId];
+        let sql = `SELECT sl.id, sl.stock_id, sl.quantity, sl.location_code, sl.pallet_seq, sl.batch_number, sl.uom, sl.inbound_item_id
+                   FROM stock_locations sl
+                   JOIN stock st ON sl.stock_id = st.id
+                   WHERE st.product_id = $1
+                     AND st.stock_status = 'Available'
+                     AND sl.status = 'Available'
+                     AND sl.quantity > 0
+                     AND (st.expiry_date IS NULL OR st.expiry_date > CURRENT_DATE)`;
+        if (item.location) {
+          params.push(item.location);
+          sql += ` AND sl.location_code = $${params.length}`;
+        }
+        sql += ` ORDER BY (st.expiry_date IS NULL) ASC, st.expiry_date ASC, sl.id ASC FOR UPDATE OF sl`;
+        const rowsR = await client.query(sql, params);
+
+        let remaining = needed;
+        let taken = 0;
+        const allocations: Array<{ id: number; take: number; full: boolean; location_code: string; batch_number: string | null; pallet_seq: number }> = [];
+        for (const row of rowsR.rows) {
+          if (remaining <= 0) break;
+          const take = Math.min(remaining, Number(row.quantity));
+          if (take <= 0) continue;
+          allocations.push({
+            id: Number(row.id),
+            take,
+            full: take === Number(row.quantity),
+            location_code: row.location_code,
+            batch_number: row.batch_number,
+            pallet_seq: row.pallet_seq,
+          });
+          remaining -= take;
+          taken += take;
+        }
+        if (remaining > 0) {
+          throw ApiException.conflict(`Stok tidak cukup untuk item ${productId}: tersedia ${taken}, dibutuhkan ${needed}`);
+        }
+
+        for (const alloc of allocations) {
+          let reservedId = alloc.id;
+          if (alloc.full) {
+            await client.query(`UPDATE stock_locations SET status = 'Reserved', updated_at = NOW() WHERE id = $1`, [alloc.id]);
+          } else {
+            await client.query(`UPDATE stock_locations SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2`, [alloc.take, alloc.id]);
+            const src = await client.query('SELECT * FROM stock_locations WHERE id = $1', [alloc.id]);
+            const s = src.rows[0];
+            const insLoc = await client.query(
+              `INSERT INTO stock_locations (stock_id, location_code, pallet_seq, quantity, original_quantity, uom, is_full_pallet, batch_number, inbound_item_id, status)
+               VALUES ($1,$2,$3,$4,$4,$5,0,$6,$7,'Reserved') RETURNING id`,
+              [s.stock_id, s.location_code, s.pallet_seq, alloc.take, s.uom, s.batch_number, s.inbound_item_id],
+            );
+            reservedId = Number(insLoc.rows[0].id);
+          }
+          await client.query(
+            'INSERT INTO outbound_item_locations (outbound_item_id, stock_location_id, quantity) VALUES ($1,$2,$3)',
+            [item.id, reservedId, alloc.take],
+          );
+        }
+
+        const firstAlloc = allocations[0];
+        const upp = Math.max(1, Number(item.product_upp ?? 4));
+        const palletQty = calcPalletByLocation(needed, upp, firstAlloc?.location_code ?? item.location ?? null);
+        await client.query(
+          `INSERT INTO picklist_items (picklist_id, product_id, batch_no, location, quantity, uom, pallet, picked_quantity, status, picker_id, batch_number, pallet_seq)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,0,'Pending',$8,$9,$10)`,
+          [
+            picklistId,
+            productId,
+            firstAlloc?.batch_number ?? item.batch_no ?? 'BAIK',
+            firstAlloc?.location_code ?? item.location ?? null,
+            needed,
+            item.uom,
+            palletQty,
+            pickerId,
+            firstAlloc?.batch_number ?? item.batch_number ?? null,
+            firstAlloc?.pallet_seq ?? 1,
+          ],
+        );
+      }
+
+      await client.query(`UPDATE outbound_orders SET status = 'Picking', updated_at = NOW() WHERE id = $1`, [outboundId]);
+    });
+  }
+
+  /**
+   * ship — spec §1.7. Only writer of the outbound ledger OUT rows (per gotcha §4/§3: Outbound
+   * balance = plain SUM(quantity_in)-SUM(quantity_out) over the WHOLE ledger for the product,
+   * no QUA_SHELL/TRANSFER exclusions — unlike Inbound's runningBalance). Marks the Reserved
+   * stock_locations rows Picked and decrements the parent stock.quantity. Requires order status
+   * 'Picking' (i.e. already picked via pickItems).
+   */
+  async ship(outboundId: number, currentUserId: number | null): Promise<void> {
+    const order = await this.getById(outboundId);
+    if (!order) throw ApiException.notFound('Outbound tidak ditemukan');
+    if (['Shipped', 'Delivered', 'Completed'].includes(order.status)) {
+      throw ApiException.conflict('Order sudah dikirim/selesai.');
+    }
+    if (order.status !== 'Picking') {
+      throw ApiException.conflict('Order harus berstatus Picking sebelum dikirim.');
+    }
+
+    await this.db.transaction(async (client) => {
+      const allocR = await client.query(
+        `SELECT oil.stock_location_id, oil.quantity, sl.location_code, sl.stock_id, sl.batch_number,
+                oi.product_id, oi.uom
+         FROM outbound_item_locations oil
+         JOIN stock_locations sl ON oil.stock_location_id = sl.id
+         JOIN outbound_items oi ON oil.outbound_item_id = oi.id
+         WHERE oi.outbound_order_id = $1
+         ORDER BY oil.id`,
+        [outboundId],
+      );
+      if (allocR.rows.length === 0) {
+        throw ApiException.conflict('Order belum di-pick, tidak ada alokasi stok.');
+      }
+
+      const balanceCache = new Map<number, number>();
+      const getBalance = async (productId: number): Promise<number> => {
+        const cached = balanceCache.get(productId);
+        if (cached !== undefined) return cached;
+        const r = await client.query(
+          'SELECT COALESCE(SUM(quantity_in),0) - COALESCE(SUM(quantity_out),0) AS balance FROM stock_ledger WHERE product_id = $1',
+          [productId],
+        );
+        const bal = Number(r.rows[0].balance ?? 0);
+        balanceCache.set(productId, bal);
+        return bal;
+      };
+
+      const stockDecrements = new Map<number, number>();
+
+      for (const alloc of allocR.rows) {
+        const productId = Number(alloc.product_id);
+        const qty = Number(alloc.quantity);
+        const prodR = await client.query('SELECT uom_per_pallet FROM products WHERE id = $1', [productId]);
+        const upp = Math.max(1, Number(prodR.rows[0]?.uom_per_pallet ?? 4));
+        const pallet = calcPalletByLocation(qty, upp, alloc.location_code);
+
+        const cur = await getBalance(productId);
+        const newBalance = cur - qty;
+        balanceCache.set(productId, newBalance);
+
+        await client.query(
+          `INSERT INTO stock_ledger
+             (transaction_date, product_id, transaction_type, reference_type,
+              reference_id, reference_number, batch_number, quantity_in,
+              quantity_out, uom, pallet, balance, location, notes)
+           VALUES ($1,$2,'OUT','Outbound',$3,$4,$5,0,$6,$7,$8,$9,$10,$11)`,
+          [
+            todayStr(),
+            productId,
+            outboundId,
+            order.order_number,
+            alloc.batch_number,
+            qty,
+            alloc.uom,
+            pallet,
+            newBalance,
+            alloc.location_code,
+            `[Outbound] Ship | ${order.order_number}`,
+          ],
+        );
+
+        const stockId = Number(alloc.stock_id);
+        stockDecrements.set(stockId, (stockDecrements.get(stockId) ?? 0) + qty);
+      }
+
+      const allocIds = allocR.rows.map((r: any) => Number(r.stock_location_id));
+      await client.query(
+        `UPDATE stock_locations SET status = 'Picked', updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'Reserved'`,
+        [allocIds],
+      );
+
+      for (const [stockId, qty] of stockDecrements) {
+        await client.query('UPDATE stock SET quantity = GREATEST(0, quantity - $1), updated_at = NOW() WHERE id = $2', [qty, stockId]);
+      }
+
+      await client.query(
+        `UPDATE outbound_orders SET status = 'Shipped', shipped_by = $1, shipped_date = $2, updated_at = NOW() WHERE id = $3`,
+        [currentUserId, todayStr(), outboundId],
+      );
+    });
+  }
+
   async getPicklistLocations(outboundItemId: number): Promise<any[]> {
     const r = await this.db.query(
       `SELECT sl.*, lm.zone
