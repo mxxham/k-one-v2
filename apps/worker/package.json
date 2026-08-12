@@ -1,0 +1,25 @@
+{
+  "name": "@k-one/worker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "dev": "tsc-watch --onSuccess \"node dist/main.js\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@k-one/shared": "*",
+    "bullmq": "^6.1.0",
+    "exceljs": "^4.4.0",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "tsc-watch": "^6.2.1",
+    "typescript": "^5.6.3"
+  }
+}

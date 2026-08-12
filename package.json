@@ -1,0 +1,19 @@
+{
+  "name": "k-one-v2",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @k-one/api && npm run build -w @k-one/worker",
+    "typecheck": "npm run typecheck -w @k-one/api && npm run typecheck -w @k-one/worker",
+    "lint": "npm run lint -w @k-one/api && npm run lint -w @k-one/worker",
+    "dev:api": "npm run dev -w @k-one/api",
+    "dev:worker": "npm run dev -w @k-one/worker"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
