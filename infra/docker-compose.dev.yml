@@ -1,0 +1,42 @@
+# =============================================================================
+# K-one v2 — docker-compose (dev/reference)
+#
+# Ports chosen to avoid collisions with the original PHP stack:
+#   - original PHP API :80 (kone-app)
+#   - new web          :8081
+#   - new api          :3000
+#   - postgres         :5544 (host)
+#   - redis            :6389 (host)
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: k2-postgres
+    environment:
+      POSTGRES_DB: k_one
+      POSTGRES_USER: kone
+      POSTGRES_PASSWORD: kone
+    ports:
+      - "5544:5432"
+    volumes:
+      - k2_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kone -d k_one"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: k2-redis
+    ports:
+      - "6389:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  k2_pgdata:

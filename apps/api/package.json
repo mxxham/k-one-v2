@@ -1,5 +1,4 @@
 {
-<<<<<<< HEAD
   "name": "@k-one/api",
   "version": "1.0.0",
   "private": true,
@@ -24,7 +23,6 @@
     "bullmq": "^6.1.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
-    "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
@@ -44,25 +42,5 @@
     "@types/pg": "^8.15.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.3"
-=======
-  "name": "k-one-v2",
-  "private": true,
-  "version": "1.0.0",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
-  "scripts": {
-    "build:shared": "npm run build -w @k-one/shared",
-    "build": "npm run build:shared && npm run build -w @k-one/api && npm run build -w @k-one/worker && npm run build -w @k-one/web",
-    "typecheck": "npm run typecheck -w @k-one/api && npm run typecheck -w @k-one/worker && npm run typecheck -w @k-one/web",
-    "lint": "npm run lint -w @k-one/api && npm run lint -w @k-one/worker && npm run lint -w @k-one/web",
-    "dev:api": "npm run dev -w @k-one/api",
-    "dev:worker": "npm run dev -w @k-one/worker",
-    "dev:web": "npm run dev -w @k-one/web"
-  },
-  "engines": {
-    "node": ">=20"
->>>>>>> 20e09e3f2eb64418914f3a8f4b5f3747f14901aa
   }
 }

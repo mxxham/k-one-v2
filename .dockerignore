@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/coverage
+**/*.log
+.git
+.gitignore
+frontend/node_modules
+frontend/dist
+infra
+api.out.log
+api.err.log
+worker.out.log
+worker.err.log
+*.patch
