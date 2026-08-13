@@ -1,0 +1,31 @@
+import { DbService } from '../database/db.service';
+import { InboundService } from '../inbound/inbound.service';
+import { OutboundService } from '../outbound/outbound.service';
+type Q = Record<string, any>;
+export declare class ReportService {
+    private readonly db;
+    private readonly inbound;
+    private readonly outbound;
+    constructor(db: DbService, inbound: InboundService, outbound: OutboundService);
+    dashboardStats(): Promise<Q>;
+    aisleDetail(aisle: string): Promise<Q>;
+    dailyReport(date: string | null, dateTo: string | null): Promise<Q>;
+    private reportStockSummary;
+    private reportInboundActivity;
+    private reportOutboundActivity;
+    private reportExpiringItems;
+    private reportLowStock;
+    private reportLedgerSummary;
+    reportProducts(): Promise<any[]>;
+    reportInbound(status: string | null, start: string | null, end: string | null): Promise<any[]>;
+    reportOutbound(status: string | null, start: string | null, end: string | null): Promise<any[]>;
+    reportStock(): Promise<any[]>;
+    reportLedger(start: string | null, end: string | null): Promise<any[]>;
+    activityLogList(module: string | null, limit: number): Promise<any[]>;
+    activityModules(): Promise<string[]>;
+    private actionLabel;
+    private moduleIcon;
+    resetOperationalData(): Promise<void>;
+    private formatDayMonthYear;
+}
+export {};

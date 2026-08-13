@@ -1,0 +1,31 @@
+import { DbService } from '../database/db.service';
+import { InboundService } from './inbound.service';
+import { ActivityLogger } from '../common/activity-logger';
+import { MasterDataService } from '../master/master-data.service';
+export declare class InboundActions {
+    private readonly db;
+    private readonly inbound;
+    private readonly activity;
+    private readonly master;
+    constructor(db: DbService, inbound: InboundService, activity: ActivityLogger, master: MasterDataService);
+    private actCtx;
+    private list;
+    private detail;
+    private stats;
+    private searchProducts;
+    private create;
+    private update;
+    private delete;
+    private addItem;
+    private updateItem;
+    private updateItemQty;
+    private updateItemDates;
+    private updateItemPalletNo;
+    private deleteItem;
+    private updateItemStatus;
+    private savePalletLocations;
+    private saveItemLocation;
+    private advanceStatus;
+    private complete;
+    private repairLedger;
+}

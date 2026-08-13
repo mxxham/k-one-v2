@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "paths": {
+      "@k-one/shared": ["../../packages/shared/dist"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
+}

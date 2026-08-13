@@ -1,0 +1,14 @@
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +9ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mConfigModule dependencies initialized[39m[38;5;3m +0ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mDatabaseModule dependencies initialized[39m[38;5;3m +1ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mDispatcherModule dependencies initialized[39m[38;5;3m +0ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mCommonModule dependencies initialized[39m[38;5;3m +1ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mMasterModule dependencies initialized[39m[38;5;3m +0ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mStockModule dependencies initialized[39m[38;5;3m +0ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:38 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAuthModule dependencies initialized[39m[38;5;3m +0ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:39 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mGatewayController {/index.php}:[39m[38;5;3m +138ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:39 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/index.php, GET} route[39m[38;5;3m +3ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:39 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/index.php, POST} route[39m[38;5;3m +0ms[39m
+[32m[Nest] 27760  - [39m08/12/2026, 12:47:39 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +2ms[39m
+K-one API listening on :3000

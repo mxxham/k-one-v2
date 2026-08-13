@@ -1,0 +1,55 @@
+import { DbService } from '../database/db.service';
+type Client = any;
+interface InboundItem {
+    id: number;
+    inbound_order_id: number;
+    product_id: number;
+    uom?: string;
+    uom_per_pallet?: number;
+    quantity?: number;
+    actual_qty?: number;
+    batch_number?: string | null;
+    batch_no?: string | null;
+    location?: string | null;
+    in_process_status?: string;
+    stock_status?: string;
+    pallet?: number;
+    manufacture_date?: string | null;
+    exp_date?: string | null;
+    [k: string]: any;
+}
+export declare class InboundService {
+    private readonly db;
+    constructor(db: DbService);
+    generateNumber(): Promise<string>;
+    getAll(status: string | null, limit: number | null, offset: number, odNo: string | null): Promise<any[]>;
+    countAll(status: string | null, odNo: string | null): Promise<number>;
+    getById(id: number): Promise<any>;
+    getItems(inboundId: number): Promise<InboundItem[]>;
+    getItemLocations(itemId: number): Promise<any[]>;
+    getOrderLocations(inboundId: number): Promise<any[]>;
+    create(data: Record<string, any>): Promise<number>;
+    addItem(inboundId: number, item: Record<string, any>, client?: Client): Promise<number>;
+    saveItemLocations(itemId: number, stockId: number | null, palletLocs: any[], batchNumber: string | null, uom?: string, client?: Client): Promise<void>;
+    calculatePallet(quantity: number, uomPerPallet: number): number;
+    calcPalletByLocation(quantity: number, uomPerPallet: number, locationCode: string | null): number;
+    calculateExpiryDate(productionDate: string | null | undefined, years?: number): string | null;
+    update(id: number, data: Record<string, any>): Promise<void>;
+    updateItem(itemId: number, data: Record<string, any>): Promise<boolean>;
+    updateItemDates(itemId: number, manufactureDate: string | null, expDate: string | null): Promise<boolean>;
+    updateItemPalletNo(itemId: number, palletNo: string | null): Promise<boolean>;
+    changeItemStatus(itemId: number, newProcess: string): Promise<void>;
+    savePalletLocations(itemId: number, pallets: any[]): Promise<void>;
+    saveItemLocation(itemId: number, loc: string): Promise<void>;
+    advanceStatus(id: number, newStatus: string, receivedById: number, receivedDate: string): Promise<void>;
+    updateItemQty(itemId: number, newQty: number): Promise<void>;
+    deleteItem(itemId: number): Promise<void>;
+    complete(id: number): Promise<void>;
+    private syncBatchToOutbound;
+    private addToLedger;
+    private runningBalance;
+    regenerateLedger(id: number): Promise<void>;
+    delete(id: number): Promise<void>;
+    getStats(): Promise<Record<string, any>>;
+}
+export {};
