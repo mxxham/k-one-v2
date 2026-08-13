@@ -18,6 +18,7 @@
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/platform-express": "^11.1.29",
     "@nestjs/terminus": "^11.0.0",
+    "@types/multer": "^2.2.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^6.1.0",
     "class-transformer": "^0.5.1",
@@ -25,9 +26,11 @@
     "exceljs": "^4.4.0",
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
     "pg": "^8.23.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

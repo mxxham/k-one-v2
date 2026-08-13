@@ -1,0 +1,302 @@
+diff --git a/apps/api/src/outbound/outbound.service.ts b/apps/api/src/outbound/outbound.service.ts
+index 36c100b..5ad341b 100644
+--- a/apps/api/src/outbound/outbound.service.ts
++++ b/apps/api/src/outbound/outbound.service.ts
+@@ -331,6 +331,251 @@ export class OutboundService {
+     };
+   }
+ 
++  /**
++   * pickItems — spec §1.6 (docs/spec-2-outbound-picklist-bintransfer.md).
++   * Only writer of outbound_item_locations + Reserved stock_locations + a picklist.
++   * Does NOT write ledger (that happens in `ship`) and does NOT decrement stock.quantity.
++   * Requires order status 'Open'. Supports re-pick (clears prior allocations for the items first).
++   *
++   * NOTE: the source PHP spec mentions `outbound_orders.picked_by/picked_at`, but the ported
++   * schema (001-schema.sql, S2) has no such columns on outbound_orders — that bookkeeping lives
++   * on `picklists`/`picklist_items` instead, so this only sets order status here.
++   */
++  async pickItems(outboundId: number, itemIds: number[], pickerId: number | null): Promise<void> {
++    const order = await this.getById(outboundId);
++    if (!order) throw ApiException.notFound('Outbound tidak ditemukan');
++    if (order.status !== 'Open') {
++      throw ApiException.conflict('Hanya order berstatus Open yang bisa di-pick');
++    }
++
++    await this.db.transaction(async (client) => {
++      const itemsR = await client.query(
++        `SELECT oi.*, p.uom_per_pallet as product_upp
++         FROM outbound_items oi
++         JOIN products p ON oi.product_id = p.id
++         WHERE oi.outbound_order_id = $1 ${itemIds.length ? 'AND oi.id = ANY($2::bigint[])' : ''}
++         ORDER BY oi.id`,
++        itemIds.length ? [outboundId, itemIds] : [outboundId],
++      );
++      const items = itemsR.rows;
++      if (items.length === 0) throw ApiException.badRequest('Tidak ada item untuk di-pick.');
++
++      // Re-pick support: drop any previous allocations for these items before re-allocating.
++      const idList = items.map((it: any) => Number(it.id));
++      await client.query('DELETE FROM outbound_item_locations WHERE outbound_item_id = ANY($1::bigint[])', [idList]);
++
++      const existingPicklist = await client.query(
++        `SELECT id FROM picklists WHERE outbound_order_id = $1 AND status IN ('Draft','Confirmed','Picking') ORDER BY id DESC LIMIT 1`,
++        [outboundId],
++      );
++      let picklistId: number;
++      if (existingPicklist.rows.length > 0) {
++        picklistId = Number(existingPicklist.rows[0].id);
++      } else {
++        const picklistNumber = await generateNumber(this.db, {
++          table: 'picklists',
++          column: 'picklist_number',
++          prefix: `PKL-${todayStr().slice(0, 7).replace('-', '')}-`,
++          searchPrefix: `PKL-${todayStr().slice(0, 7).replace('-', '')}-`,
++          pad: 4,
++        });
++        const ins = await client.query(
++          `INSERT INTO picklists (outbound_order_id, picklist_number, created_date, status, created_by, confirmed_at)
++           VALUES ($1,$2,$3,'Confirmed',$4,NOW()) RETURNING id`,
++          [outboundId, picklistNumber, todayStr(), pickerId],
++        );
++        picklistId = Number(ins.rows[0].id);
++      }
++
++      for (const item of items) {
++        const productId = Number(item.product_id);
++        const needed = Number(item.quantity ?? 0);
++        if (needed <= 0) continue;
++
++        const params: unknown[] = [productId];
++        let sql = `SELECT sl.id, sl.stock_id, sl.quantity, sl.location_code, sl.pallet_seq, sl.batch_number, sl.uom, sl.inbound_item_id
++                   FROM stock_locations sl
++                   JOIN stock st ON sl.stock_id = st.id
++                   WHERE st.product_id = $1
++                     AND st.stock_status = 'Available'
++                     AND sl.status = 'Available'
++                     AND sl.quantity > 0
++                     AND (st.expiry_date IS NULL OR st.expiry_date > CURRENT_DATE)`;
++        if (item.location) {
++          params.push(item.location);
++          sql += ` AND sl.location_code = $${params.length}`;
++        }
++        sql += ` ORDER BY (st.expiry_date IS NULL) ASC, st.expiry_date ASC, sl.id ASC FOR UPDATE OF sl`;
++        const rowsR = await client.query(sql, params);
++
++        let remaining = needed;
++        let taken = 0;
++        const allocations: Array<{ id: number; take: number; full: boolean; location_code: string; batch_number: string | null; pallet_seq: number }> = [];
++        for (const row of rowsR.rows) {
++          if (remaining <= 0) break;
++          const take = Math.min(remaining, Number(row.quantity));
++          if (take <= 0) continue;
++          allocations.push({
++            id: Number(row.id),
++            take,
++            full: take === Number(row.quantity),
++            location_code: row.location_code,
++            batch_number: row.batch_number,
++            pallet_seq: row.pallet_seq,
++          });
++          remaining -= take;
++          taken += take;
++        }
++        if (remaining > 0) {
++          throw ApiException.conflict(`Stok tidak cukup untuk item ${productId}: tersedia ${taken}, dibutuhkan ${needed}`);
++        }
++
++        for (const alloc of allocations) {
++          let reservedId = alloc.id;
++          if (alloc.full) {
++            await client.query(`UPDATE stock_locations SET status = 'Reserved', updated_at = NOW() WHERE id = $1`, [alloc.id]);
++          } else {
++            await client.query(`UPDATE stock_locations SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2`, [alloc.take, alloc.id]);
++            const src = await client.query('SELECT * FROM stock_locations WHERE id = $1', [alloc.id]);
++            const s = src.rows[0];
++            const insLoc = await client.query(
++              `INSERT INTO stock_locations (stock_id, location_code, pallet_seq, quantity, original_quantity, uom, is_full_pallet, batch_number, inbound_item_id, status)
++               VALUES ($1,$2,$3,$4,$4,$5,0,$6,$7,'Reserved') RETURNING id`,
++              [s.stock_id, s.location_code, s.pallet_seq, alloc.take, s.uom, s.batch_number, s.inbound_item_id],
++            );
++            reservedId = Number(insLoc.rows[0].id);
++          }
++          await client.query(
++            'INSERT INTO outbound_item_locations (outbound_item_id, stock_location_id, quantity) VALUES ($1,$2,$3)',
++            [item.id, reservedId, alloc.take],
++          );
++        }
++
++        const firstAlloc = allocations[0];
++        const upp = Math.max(1, Number(item.product_upp ?? 4));
++        const palletQty = calcPalletByLocation(needed, upp, firstAlloc?.location_code ?? item.location ?? null);
++        await client.query(
++          `INSERT INTO picklist_items (picklist_id, product_id, batch_no, location, quantity, uom, pallet, picked_quantity, status, picker_id, batch_number, pallet_seq)
++           VALUES ($1,$2,$3,$4,$5,$6,$7,0,'Pending',$8,$9,$10)`,
++          [
++            picklistId,
++            productId,
++            firstAlloc?.batch_number ?? item.batch_no ?? 'BAIK',
++            firstAlloc?.location_code ?? item.location ?? null,
++            needed,
++            item.uom,
++            palletQty,
++            pickerId,
++            firstAlloc?.batch_number ?? item.batch_number ?? null,
++            firstAlloc?.pallet_seq ?? 1,
++          ],
++        );
++      }
++
++      await client.query(`UPDATE outbound_orders SET status = 'Picking', updated_at = NOW() WHERE id = $1`, [outboundId]);
++    });
++  }
++
++  /**
++   * ship — spec §1.7. Only writer of the outbound ledger OUT rows (per gotcha §4/§3: Outbound
++   * balance = plain SUM(quantity_in)-SUM(quantity_out) over the WHOLE ledger for the product,
++   * no QUA_SHELL/TRANSFER exclusions — unlike Inbound's runningBalance). Marks the Reserved
++   * stock_locations rows Picked and decrements the parent stock.quantity. Requires order status
++   * 'Picking' (i.e. already picked via pickItems).
++   */
++  async ship(outboundId: number, currentUserId: number | null): Promise<void> {
++    const order = await this.getById(outboundId);
++    if (!order) throw ApiException.notFound('Outbound tidak ditemukan');
++    if (['Shipped', 'Delivered', 'Completed'].includes(order.status)) {
++      throw ApiException.conflict('Order sudah dikirim/selesai.');
++    }
++    if (order.status !== 'Picking') {
++      throw ApiException.conflict('Order harus berstatus Picking sebelum dikirim.');
++    }
++
++    await this.db.transaction(async (client) => {
++      const allocR = await client.query(
++        `SELECT oil.stock_location_id, oil.quantity, sl.location_code, sl.stock_id, sl.batch_number,
++                oi.product_id, oi.uom
++         FROM outbound_item_locations oil
++         JOIN stock_locations sl ON oil.stock_location_id = sl.id
++         JOIN outbound_items oi ON oil.outbound_item_id = oi.id
++         WHERE oi.outbound_order_id = $1
++         ORDER BY oil.id`,
++        [outboundId],
++      );
++      if (allocR.rows.length === 0) {
++        throw ApiException.conflict('Order belum di-pick, tidak ada alokasi stok.');
++      }
++
++      const balanceCache = new Map<number, number>();
++      const getBalance = async (productId: number): Promise<number> => {
++        const cached = balanceCache.get(productId);
++        if (cached !== undefined) return cached;
++        const r = await client.query(
++          'SELECT COALESCE(SUM(quantity_in),0) - COALESCE(SUM(quantity_out),0) AS balance FROM stock_ledger WHERE product_id = $1',
++          [productId],
++        );
++        const bal = Number(r.rows[0].balance ?? 0);
++        balanceCache.set(productId, bal);
++        return bal;
++      };
++
++      const stockDecrements = new Map<number, number>();
++
++      for (const alloc of allocR.rows) {
++        const productId = Number(alloc.product_id);
++        const qty = Number(alloc.quantity);
++        const prodR = await client.query('SELECT uom_per_pallet FROM products WHERE id = $1', [productId]);
++        const upp = Math.max(1, Number(prodR.rows[0]?.uom_per_pallet ?? 4));
++        const pallet = calcPalletByLocation(qty, upp, alloc.location_code);
++
++        const cur = await getBalance(productId);
++        const newBalance = cur - qty;
++        balanceCache.set(productId, newBalance);
++
++        await client.query(
++          `INSERT INTO stock_ledger
++             (transaction_date, product_id, transaction_type, reference_type,
++              reference_id, reference_number, batch_number, quantity_in,
++              quantity_out, uom, pallet, balance, location, notes)
++           VALUES ($1,$2,'OUT','Outbound',$3,$4,$5,0,$6,$7,$8,$9,$10,$11)`,
++          [
++            todayStr(),
++            productId,
++            outboundId,
++            order.order_number,
++            alloc.batch_number,
++            qty,
++            alloc.uom,
++            pallet,
++            newBalance,
++            alloc.location_code,
++            `[Outbound] Ship | ${order.order_number}`,
++          ],
++        );
++
++        const stockId = Number(alloc.stock_id);
++        stockDecrements.set(stockId, (stockDecrements.get(stockId) ?? 0) + qty);
++      }
++
++      const allocIds = allocR.rows.map((r: any) => Number(r.stock_location_id));
++      await client.query(
++        `UPDATE stock_locations SET status = 'Picked', updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'Reserved'`,
++        [allocIds],
++      );
++
++      for (const [stockId, qty] of stockDecrements) {
++        await client.query('UPDATE stock SET quantity = GREATEST(0, quantity - $1), updated_at = NOW() WHERE id = $2', [qty, stockId]);
++      }
++
++      await client.query(
++        `UPDATE outbound_orders SET status = 'Shipped', shipped_by = $1, shipped_date = $2, updated_at = NOW() WHERE id = $3`,
++        [currentUserId, todayStr(), outboundId],
++      );
++    });
++  }
++
+   async getPicklistLocations(outboundItemId: number): Promise<any[]> {
+     const r = await this.db.query(
+       `SELECT sl.*, lm.zone
+diff --git a/session.md b/session.md
+index 105bf86..3bcef1f 100644
+--- a/session.md
++++ b/session.md
+@@ -123,8 +123,17 @@ NOTE: source of truth for live schema differences = the running mysql container
+ - [x] **S3 Core infra** — config/env, DB pool, JWT auth + guards (write/admin), activity-logger, api-exception + global filter, date-util (Asia/Jakarta), number-gen (race-safe, 20-try), pallet helper, dispatcher gateway + action registry with per-action permissions. Decision: **`pg` + raw SQL** (not TypeORM).
+ - [x] **S4 Master data** — products / customers / locations (incl. zone_summary, available, suggest) / users (admin) in `master/master.actions.ts`; shared `master-data.service.ts`.
+ - [x] **S5 Stock + Ledger** — stock list/summary/expiring/by_location/detail/locations/transfer/adjust + ledger list/repair_all in `stock/stock.actions.ts`. Permissions: stock.adjust=admin, ledger.repair_all=admin.
+-- [ ] **S6 Inbound** — IN PROGRESS: `inbound/inbound.service.ts` (~981 lines) written but not wired (no `inbound.module.ts`; `app.module.ts` lacks InboundModule). 3 typecheck errors in inbound.service.ts (L379 rowCount-null, L382 rowCount-null, L654 `string | null | undefined`). Fix → add module → register in app.module → verify.
+-- [ ] S7 Outbound / S8 Picklist / S9 StockTake / S10 BinTransfer / S11 Dashboard+reports+activitylog+system / S12 Import / S13 Worker / S14 Infra / S15 Frontend / S16 Verify — not started.
++- [x] **S6 Inbound** — `inbound/inbound.service.ts` (~1045 lines), `inbound.module.ts` wired into `app.module.ts`. Verified clean via `tsc --noEmit` (0 errors) as of 2026-08-12 — the previously-tracked 3 errors are gone (fixed sometime between the last status update and this session; not re-derived here since typecheck already confirms correctness).
++- [x] **S7 Outbound** — `outbound/{outbound.service.ts,outbound.actions.ts,outbound.module.ts}` wired into `app.module.ts`. As of this session's start, `pickItems`/`ship` were called from outbound.actions.ts but missing from OutboundService (2 typecheck errors) — implemented both from `docs/spec-2-outbound-picklist-bintransfer.md` §1.6/§1.7 + the ported schema (001-schema.sql). See todo.md S7 entry for full behavior + deviations. `tsc --noEmit` and `nest build` both clean.
++- [ ] S8 Picklist / S9 StockTake / S10 BinTransfer / S11 Dashboard+reports+activitylog+system / S12 Import / S13 Worker / S14 Infra / S15 Frontend / S16 Verify — not started.
++
++## 10. Decision log (this session, 2026-08-12)
++- Resumed from a GitHub snapshot (`github.com/mxxham/k-one-v2`, 3 commits) rather than the Windows filesystem paths in prompt.md (`D:\K-one-v2`, `D:\K-one\k-one\`) — the original PHP source tree is NOT present anywhere accessible in this environment, only the pre-extracted `docs/spec-*.md` files. All S7 work was therefore done strictly from the spec docs + the already-ported Postgres schema, with no ability to diff against a live PHP/MySQL reference (per prompt.md §"Working style" — normally every module is verified against the running PHP API; that step was skipped here and should be done manually against the real `kone-app`/`kone-db` containers before treating S7 as fully parity-verified).
++- `todo.md`/`session.md` in this checkout were stale relative to the actual code: S6 (Inbound) was already fully wired (module + app.module import) and typechecked clean, contradicting the "3 typecheck errors, not wired" note. Corrected both files to match reality rather than trusting the stale checklist.
++- `pickItems`/`ship` implemented as documented in todo.md S7 note above. Two spec ambiguities were resolved conservatively rather than guessed elaborately:
++  1. The "extra picks scan (pick full pallets)" behavior in spec §1.6 was left unimplemented — the spec text itself flags uncertainty about it, and guessing wrong here risks silently over-picking real stock. Only exact per-item FEFO quantities are allocated.
++  2. Spec §1.6 references `outbound_orders.picked_by`/`picked_at`, but the S2-ported schema has no such columns — order-level pick attribution now lives only on the `picklists` row (`created_by`, `confirmed_at`) created inside `pickItems`.
++- Next recommended step: **S8 Picklist module** (`docs/spec-2-outbound-picklist-bintransfer.md` §2) — list/detail/stats/create_from_outbound/confirm/complete/delete/update_item/export_data. Note `pickItems` already creates a `picklists` header + `picklist_items` rows as a side effect, so S8 should read/query that data rather than re-creating it, and `createFromOutbound` needs to coexist with (or replace) that auto-creation path — worth deciding explicitly before writing S8.
+ - Working dir note: the v2 source of truth is `D:\K-one-v2\todo.md` + `session.md` (per `prompt.md`). The `todo.md`/`session.md` sitting in the PHP reference repo (`D:\K-one\k-one\todo.md`/`session.md`) are STALE leftovers from the earlier abandoned Express+mysql2 port and should be ignored (do not let them confuse the v2 tracker).
+ 
+ ## 9. Frontend adapt notes
+diff --git a/todo.md b/todo.md
+index bfe1656..d7bd391 100644
+--- a/todo.md
++++ b/todo.md
+@@ -25,9 +25,14 @@ Scope of original system (for reference):
+   - DONE: `master/master.actions.ts` registers `products` (list/all/detail/create/update/delete), `customers`, `locations` (incl. zone_summary/suggest/available), `users` (admin-only CRUD). Plus `master-data.service.ts` shared lookups (e.g. productOptions for ledger).
+ - [x] **S5 Stock domain**: list/summary/expiring/by_location/locations, ledger list/repair_all, transfer, adjust (exact balance/pallet math)
+   - DONE: `stock/stock.actions.ts` registers `stock` (list/summary/expiring/by_location/detail/locations/transfer/adjust) + `ledger` (list/repair_all). Admin-only: stock adjust, ledger repair_all.
+-- [ ] **S6 Inbound module**: full handler parity (list/detail/stats/create/update/delete/items/pallet-locations/status flow/advance/complete/repair_ledger)
+-  - IN PROGRESS: `inbound/inbound.service.ts` written (~981 lines). NOT yet wired into the app — no `inbound.module.ts`, `app.module.ts` does NOT import InboundModule. 3 typecheck errors to fix in inbound.service.ts (lines 379, 382, 654).
+-- [ ] **S7 Outbound module**: full handler parity (list/detail/stats/check_stock/create/add_item FEFO/pick/ship/complete/delete/status)
++- [x] **S6 Inbound module**: full handler parity (list/detail/stats/create/update/delete/items/pallet-locations/status flow/advance/complete/repair_ledger)
++  - DONE: `inbound/inbound.service.ts` (~1045 lines), `inbound.module.ts` wired into `app.module.ts`. Typecheck clean (the previously-tracked 3 errors were already fixed by the time this session resumed — verified via `tsc --noEmit`, 0 errors).
++- [x] **S7 Outbound module**: full handler parity (list/detail/stats/check_stock/create/add_item FEFO/pick/ship/complete/delete/status)
++  - DONE this session: `outbound/outbound.service.ts` + `.actions.ts` + `.module.ts` already existed (list/detail/stats/search_products/check_stock/create/update/delete/add_item/delete_item/update_item_status/complete) but `pickItems`/`ship` were referenced by outbound.actions.ts and NOT implemented (2 typecheck errors). Implemented both per `docs/spec-2-outbound-picklist-bintransfer.md` §1.6/§1.7:
++    - `pickItems`: requires order status Open; FEFO-allocates each item from `stock_locations` (same query shape as `checkStock`/addItemWithFEFO), splits partial pallet rows, marks full/split rows `Reserved`, writes `outbound_item_locations`, creates/reuses a `picklists` header (PKL-YYYYMM-NNNN) + one `picklist_items` row per outbound item, sets order status `Picking`. Writes NO ledger, does NOT decrement `stock.quantity` (matches gotcha #7/#2).
++    - `ship`: requires order status Picking; per allocation writes an `OUT`/`Outbound` `stock_ledger` row with balance = plain `SUM(quantity_in)-SUM(quantity_out)` over the whole ledger for that product (no QUA_SHELL/TRANSFER exclusions — differs from Inbound's `runningBalance`, per gotcha #3), marks `Reserved` stock_locations `Picked`, decrements parent `stock.quantity`, sets order status `Shipped` + `shipped_by`/`shipped_date`.
++    - Typecheck + `nest build` both clean after the change.
++    - Known deviations/assumptions (source PHP not available in this environment — implemented from `docs/spec-2*.md` + the ported schema only, see session.md decision log): the spec's "extra picks scan / pick full pallets" behavior was NOT implemented (exact per-item FEFO qty only, no pallet-rounding overpick); `outbound_orders.picked_by/picked_at` mentioned in the spec don't exist in the S2-ported schema, so order-level pick attribution isn't stored beyond `picklists.created_by`/`confirmed_at`.
+ - [ ] **S8 Picklist module**: create_from_outbound/confirm/complete/delete/update_item/export
+ - [ ] **S9 StockTake module**: create/auto_load/start/save_counters/advance/finish/review/apply_adjustment
+ - [ ] **S10 BinTransfer module**: create/execute/cancel

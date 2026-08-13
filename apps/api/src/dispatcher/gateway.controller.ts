@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Req, Body, Query, HttpCode, NotFoundException, Logger } from '@nestjs/common';
-import { Request } from 'express';
+import { Controller, Get, Post, Req, Body, Query, HttpCode, NotFoundException, Logger, Res, StreamableFile } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { getActionHandler, knownModule, getPermission } from './registry';
 import { resolveUser } from '../auth/guards';
 import { DbService } from '../database/db.service';
@@ -17,6 +17,9 @@ const PUBLIC_ACTIONS = new Set([
  * Bearer token user, runs the registered handler, and wraps output in
  * {success:true, ...}. Errors are handled by the ApiExceptionFilter so they
  * come back as {success:false, message} with proper HTTP codes.
+ * Handlers may return {_binary:true, buffer, filename, contentType} to stream
+ * a file download (parity with PHP binary template responses), or
+ * {_html:true, html} for an inline HTML document (parity with PHP print pages).
  */
 @Controller('index.php')
 export class GatewayController {
@@ -25,8 +28,12 @@ export class GatewayController {
   constructor(private readonly db: DbService) {}
 
   @Get()
-  async get(@Query() query: Record<string, any>, @Req() req: Request): Promise<Record<string, any>> {
-    return this.handle(query, req);
+  async get(
+    @Query() query: Record<string, any>,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<Record<string, any> | StreamableFile | string> {
+    return this.handle(query, req, {}, res);
   }
 
   @Post()
@@ -35,16 +42,22 @@ export class GatewayController {
     @Query() query: Record<string, any>,
     @Body() body: Record<string, any>,
     @Req() req: Request,
-  ): Promise<Record<string, any>> {
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<Record<string, any> | StreamableFile | string> {
     const merged = { ...query, ...body };
     if (!query.module || !query.action) {
       // PHP merges POST params into query-space; here body may carry module/action too.
-      return this.handle(merged, req, body);
+      return this.handle(merged, req, body, res);
     }
-    return this.handle(query, req, body);
+    return this.handle(query, req, body, res);
   }
 
-  private async handle(query: Record<string, any>, req: Request, body: Record<string, any> = {}): Promise<Record<string, any>> {
+  private async handle(
+    query: Record<string, any>,
+    req: Request,
+    body: Record<string, any> = {},
+    res?: Response,
+  ): Promise<Record<string, any> | StreamableFile | string> {
     const module = String(query.module ?? '');
     const action = String(query.action ?? '');
     if (module === '' || action === '') {
@@ -84,6 +97,27 @@ export class GatewayController {
       body: body as Record<string, any>,
       raw: req,
     })) ?? {};
+
+    // Binary file download (template export).
+    if (result && typeof result === 'object' && (result as any)._binary) {
+      const b = result as any;
+      res!.set({
+        'Content-Type': b.contentType,
+        'Content-Disposition': `attachment; filename="${b.filename}"`,
+        'Cache-Control': 'max-age=0',
+      });
+      return new StreamableFile(b.buffer);
+    }
+
+    // Inline HTML document (print pages). Rendered in-browser, no download.
+    if (result && typeof result === 'object' && (result as any)._html) {
+      const h = result as any;
+      res!.set({
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      return h.html as string;
+    }
 
     return { success: true, ...result };
   }

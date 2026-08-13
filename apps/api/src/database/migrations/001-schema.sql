@@ -209,6 +209,7 @@ CREATE TABLE IF NOT EXISTS outbound_items (
     od_number          VARCHAR(100),
     so_number          VARCHAR(100),
     destination_id     BIGINT,
+    customer_id        BIGINT REFERENCES customers(id),
     created_at         TIMESTAMP NOT NULL DEFAULT NOW(),
     batch_number       VARCHAR(100),
     stock_location_id  BIGINT
@@ -298,7 +299,7 @@ CREATE TABLE IF NOT EXISTS stock_ledger (
     transaction_date DATE NOT NULL,
     product_id       BIGINT NOT NULL REFERENCES products(id),
     transaction_type VARCHAR(20) NOT NULL CHECK (
-      transaction_type IN ('IN','OUT','ADJUSTMENT','TRANSFER')),
+      transaction_type IN ('IN','OUT','ADJUSTMENT','TRANSFER','TRANSFER_IN','TRANSFER_OUT')),
     reference_type   VARCHAR(50),
     reference_id     BIGINT,
     reference_number VARCHAR(50),
@@ -337,6 +338,7 @@ CREATE TABLE IF NOT EXISTS picklists (
 CREATE TABLE IF NOT EXISTS picklist_items (
     id                BIGSERIAL PRIMARY KEY,
     picklist_id       BIGINT NOT NULL REFERENCES picklists(id) ON DELETE CASCADE,
+    outbound_item_id  BIGINT REFERENCES outbound_items(id),
     product_id        BIGINT NOT NULL REFERENCES products(id),
     batch_no          VARCHAR(100) NOT NULL,
     location          VARCHAR(30),
@@ -361,15 +363,18 @@ CREATE INDEX IF NOT EXISTS idx_picklist_items_product ON picklist_items(product_
 -- STOCK TAKE
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS stock_take (
-    id          BIGSERIAL PRIMARY KEY,
-    take_number VARCHAR(50) UNIQUE NOT NULL,
-    take_date   DATE NOT NULL,
-    status      VARCHAR(20) NOT NULL DEFAULT 'Draft' CHECK (
-      status IN ('Draft','In Progress','Completed','Cancelled')),
-    notes       TEXT,
-    created_by  BIGINT NOT NULL REFERENCES users(id),
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    id              BIGSERIAL PRIMARY KEY,
+    take_number     VARCHAR(50) UNIQUE NOT NULL,
+    take_date       DATE NOT NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'Draft' CHECK (
+      status IN ('Draft','Counting','Review','Adjusted','Completed','Cancelled')),
+    notes           TEXT,
+    scope_locations TEXT,
+    scope_type      VARCHAR(20) NOT NULL DEFAULT 'full',
+    counting_round  VARCHAR(10),
+    created_by      BIGINT NOT NULL REFERENCES users(id),
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS stock_take_items (

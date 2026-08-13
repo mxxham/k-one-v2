@@ -1,0 +1,96 @@
+# =============================================================================
+# K-one v2 — production docker-compose
+# postgres + redis + api (NestJS) + worker (BullMQ) + web (nginx serving the
+# existing React SPA and proxying /k-one/api to the api service).
+#
+# Frontend source is expected at ../k-one/frontend relative to this file, or
+# you may point the build context at your checkout of D:\K-one\k-one\frontend.
+# =============================================================================
+
+name: k-one-v2
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: k2-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DB:-k_one}
+      POSTGRES_USER: ${PG_USER:-kone}
+      POSTGRES_PASSWORD: ${PG_PASS:-kone}
+    volumes:
+      - k2_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-kone} -d ${PG_DB:-k_one}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: k2-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    container_name: k2-api
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${PG_DB:-k_one}
+      DB_USER: ${PG_USER:-kone}
+      DB_PASS: ${PG_PASS:-kone}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-k-one-prod-secret-change-me}
+      JWT_EXPIRES_HOURS: ${JWT_EXPIRES_HOURS:-12}
+      TIMEZONE: Asia/Jakarta
+      API_ENV: prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/worker.Dockerfile
+    container_name: k2-worker
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${PG_USER:-kone}:${PG_PASS:-kone}@postgres:5432/${PG_DB:-k_one}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/web.Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-/k-one/api}
+    container_name: k2-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8081:80"
+
+volumes:
+  k2_pgdata:

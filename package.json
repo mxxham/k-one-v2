@@ -7,11 +7,13 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @k-one/api && npm run build -w @k-one/worker",
-    "typecheck": "npm run typecheck -w @k-one/api && npm run typecheck -w @k-one/worker",
-    "lint": "npm run lint -w @k-one/api && npm run lint -w @k-one/worker",
+    "build:shared": "npm run build -w @k-one/shared",
+    "build": "npm run build:shared && npm run build -w @k-one/api && npm run build -w @k-one/worker && npm run build -w @k-one/web",
+    "typecheck": "npm run typecheck -w @k-one/api && npm run typecheck -w @k-one/worker && npm run typecheck -w @k-one/web",
+    "lint": "npm run lint -w @k-one/api && npm run lint -w @k-one/worker && npm run lint -w @k-one/web",
     "dev:api": "npm run dev -w @k-one/api",
-    "dev:worker": "npm run dev -w @k-one/worker"
+    "dev:worker": "npm run dev -w @k-one/worker",
+    "dev:web": "npm run dev -w @k-one/web"
   },
   "engines": {
     "node": ">=20"

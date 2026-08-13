@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import multer from 'multer';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/exception-filter';
 
@@ -12,6 +13,10 @@ async function bootstrap(): Promise<void> {
       transform: true,
     }),
   );
+  // Multipart uploads (import module). multer only parses multipart/form-data;
+  // JSON bodies pass through untouched and are handled by Nest's body parser.
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 512 * 1024 * 1024 } });
+  app.use(upload.any());
   app.useGlobalFilters(new ApiExceptionFilter());
   app.enableCors();
   const port = process.env.PORT ?? 3000;

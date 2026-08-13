@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: #f1f5f5;
+}
+
+.sidebar-link.active {
+  background: linear-gradient(90deg, #026766 0%, #014f4e 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 10px rgba(2, 103, 102, 0.3);
+}
+.sidebar-link:not(.active):hover {
+  background: rgba(2, 103, 102, 0.16) !important;
+  color: #e0f2f1 !important;
+}
+.table-row:hover {
+  background-color: #f0f9f9;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #026766 !important;
+  box-shadow: 0 0 0 3px rgba(2, 103, 102, 0.12) !important;
+}
+.stat-card:hover {
+  transform: translateY(-3px);
+}

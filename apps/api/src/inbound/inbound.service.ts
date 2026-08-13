@@ -399,7 +399,7 @@ export class InboundService {
       const batch = row.batch_number ?? row.batch_no ?? null;
       const pid = Number(row.product_id);
       await this.db.query(
-        `UPDATE stock s SET s.manufacture_date = $1, s.expiry_date = $2
+        `UPDATE stock s SET manufacture_date = $1, expiry_date = $2
          FROM stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $3`,
         [mfg, exp, itemId],
       );
@@ -834,6 +834,13 @@ export class InboundService {
               plt = group.rows.length;
             }
             plt = Math.max(1, plt);
+            await client.query(
+              `DELETE FROM stock s
+               WHERE s.product_id = $1 AND s.batch_number IS NOT DISTINCT FROM $2
+                 AND s.location IS NOT DISTINCT FROM $3 AND s.stock_status IN ('Available','Dues In','Pending')
+                 AND NOT EXISTS (SELECT 1 FROM stock_locations sl4 WHERE sl4.stock_id = s.id)`,
+              [pid, batch, loc],
+            );
             const ins = await client.query(
               `INSERT INTO stock (product_id, batch_number, location, quantity, uom, pallet, manufacture_date, expiry_date, stock_status)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
@@ -864,6 +871,13 @@ export class InboundService {
         } else {
           const loc = item.location ?? 'UNALLOCATED';
           const plt = Math.max(1, uomPerPlt > 0 ? Math.ceil(totalQty / uomPerPlt) : 1);
+          await client.query(
+            `DELETE FROM stock s
+             WHERE s.product_id = $1 AND s.batch_number IS NOT DISTINCT FROM $2
+               AND s.location IS NOT DISTINCT FROM $3 AND s.stock_status IN ('Available','Dues In','Pending')
+               AND NOT EXISTS (SELECT 1 FROM stock_locations sl4 WHERE sl4.stock_id = s.id)`,
+            [pid, batchVal, loc],
+          );
           const ins = await client.query(
             `INSERT INTO stock (product_id, batch_number, location, quantity, uom, pallet, manufacture_date, expiry_date, stock_status)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
@@ -893,7 +907,7 @@ export class InboundService {
     const dbc = client ?? this.db;
     await dbc.query(
       `UPDATE outbound_items oi
-       SET oi.batch_number = $1, oi.batch_no = $1, oi.exp_date = $2
+       SET batch_number = $1, batch_no = $1, exp_date = $2
        FROM outbound_orders oo
        WHERE oi.outbound_order_id = oo.id
          AND oi.product_id = $3
@@ -903,7 +917,7 @@ export class InboundService {
     );
     await dbc.query(
       `UPDATE picklist_items pki
-       SET pki.batch_number = $1, pki.batch_no = $1
+       SET batch_number = $1, batch_no = $1
        FROM picklists pkl, outbound_orders oo
        WHERE pki.picklist_id = pkl.id AND pkl.outbound_order_id = oo.id
          AND pki.product_id = $2
