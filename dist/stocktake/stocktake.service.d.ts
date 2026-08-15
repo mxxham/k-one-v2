@@ -9,7 +9,7 @@ export declare class StockTakeService {
     getStats(): Promise<Q>;
     calculateAccuracy(stockTakeId: number): Promise<Q>;
     create(data: Q, userId: number): Promise<number>;
-    autoLoadByLocations(stockTakeId: number, locations: string[] | null): Promise<void>;
+    autoLoadByLocations(stockTakeId: number, locations: string[] | null, velocityClass?: string | null): Promise<void>;
     addItemFull(stockTakeId: number, data: Q): Promise<number>;
     update(id: number, data: Q): Promise<void>;
     delete(id: number): Promise<void>;

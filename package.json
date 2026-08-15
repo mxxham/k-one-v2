@@ -1,5 +1,4 @@
 {
-<<<<<<< HEAD
   "name": "@k-one/api",
   "version": "1.0.0",
   "private": true,
@@ -9,6 +8,8 @@
     "dev": "nest start --watch",
     "start:prod": "node dist/main.js",
     "migrate": "tsx src/database/migrate.ts",
+    "seed:map": "node seed-warehouse-map.cjs",
+    "test": "jest --config test/jest-e2e.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json"
   },
@@ -37,32 +38,18 @@
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
+    "@nestjs/testing": "^11.2.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.0",
+    "@types/jest": "^30.0.0",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.0",
+    "@types/supertest": "^7.2.1",
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.12",
     "tsx": "^4.19.0",
     "typescript": "^5.6.3"
-=======
-  "name": "k-one-v2",
-  "private": true,
-  "version": "1.0.0",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
-  "scripts": {
-    "build:shared": "npm run build -w @k-one/shared",
-    "build": "npm run build:shared && npm run build -w @k-one/api && npm run build -w @k-one/worker && npm run build -w @k-one/web",
-    "typecheck": "npm run typecheck -w @k-one/api && npm run typecheck -w @k-one/worker && npm run typecheck -w @k-one/web",
-    "lint": "npm run lint -w @k-one/api && npm run lint -w @k-one/worker && npm run lint -w @k-one/web",
-    "dev:api": "npm run dev -w @k-one/api",
-    "dev:worker": "npm run dev -w @k-one/worker",
-    "dev:web": "npm run dev -w @k-one/web"
-  },
-  "engines": {
-    "node": ">=20"
->>>>>>> 20e09e3f2eb64418914f3a8f4b5f3747f14901aa
   }
 }

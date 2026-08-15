@@ -32,6 +32,7 @@ let ExportActions = class ExportActions {
             ledger: (c) => this.ledger(c),
             stock: (c) => this.stock(c),
             stocktake: (c) => this.stocktake(c),
+            asn: (c) => this.asn(c),
             report: (c) => this.report(c),
         });
         (0, registry_1.registerActions)('print', {
@@ -43,6 +44,8 @@ let ExportActions = class ExportActions {
             report: (c) => this.reportPrint(c),
         });
         (0, registry_1.setPermission)('print', 'picklist', 'write');
+        (0, registry_1.setModuleDepartments)('export', ['all']);
+        (0, registry_1.setModuleDepartments)('print', ['all']);
     }
     idFrom(ctx) {
         return Number.parseInt(ctx.query.id ?? '0', 10) || 0;
@@ -78,6 +81,11 @@ let ExportActions = class ExportActions {
         if (!id)
             throw api_exception_1.ApiException.badRequest('id wajib diisi.');
         const r = await this.excel.stocktakeReport(id);
+        return { _binary: true, ...r };
+    }
+    async asn(ctx) {
+        const status = ctx.query.status ? String(ctx.query.status) : null;
+        const r = await this.excel.asnReport(status);
         return { _binary: true, ...r };
     }
     async report(ctx) {

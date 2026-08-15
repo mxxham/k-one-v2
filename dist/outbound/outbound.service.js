@@ -164,13 +164,25 @@ let OutboundService = class OutboundService {
               NULLIF(od.ship_to_street,'') AS item_ship_to_street,
               COALESCE(NULLIF(od.kota,''), NULLIF(o.kota,'')) AS item_ship_to_kota,
               COALESCE(ci.customer_name, co.customer_name) AS order_customer_name,
-              COALESCE(ci.customer_code, co.customer_code) AS order_customer_code
+              COALESCE(ci.customer_code, co.customer_code) AS order_customer_code,
+              cd.inbound_item_id AS cross_dock_inbound_item_id,
+              cd.batch_number AS cross_dock_batch,
+              io.order_number AS cross_dock_inbound_number
        FROM outbound_items oi
        JOIN products p ON oi.product_id = p.id
        LEFT JOIN outbound_destinations od ON oi.destination_id = od.id
        LEFT JOIN outbound_orders o ON oi.outbound_order_id = o.id
        LEFT JOIN customers ci ON oi.customer_id = ci.id
        LEFT JOIN customers co ON o.customer_id = co.id
+       LEFT JOIN LATERAL (
+         SELECT ii.id AS inbound_item_id, ii.batch_number
+         FROM inbound_items ii
+         WHERE ii.cross_dock_outbound_order_id = oi.outbound_order_id
+           AND ii.product_id = oi.product_id
+         ORDER BY ii.id
+         LIMIT 1
+       ) cd ON TRUE
+       LEFT JOIN inbound_orders io ON io.id = (SELECT ii2.inbound_order_id FROM inbound_items ii2 WHERE ii2.id = cd.inbound_item_id)
        WHERE oi.outbound_order_id = $1
        ORDER BY oi.id`, [outboundId]);
         const rows = rowsR.rows;
@@ -197,10 +209,13 @@ let OutboundService = class OutboundService {
             const currentStatus = row.in_process_status ?? 'Goods Received';
             if (currentStatus !== 'Unserviceable') {
                 const batch = row.batch_number;
+                const locExclusion = row.cross_dock_inbound_item_id
+                    ? "location NOT IN ('QUA_SHELL')"
+                    : "location NOT IN ('QUA_SHELL','STAGING')";
                 const inStockR = await this.db.query(`SELECT COUNT(*)::int FROM stock
            WHERE product_id = $1 AND batch_number IS NOT DISTINCT FROM $2
              AND stock_status = 'Available' AND quantity > 0
-             AND (location IS NULL OR location NOT IN ('QUA_SHELL','STAGING'))`, [row.product_id, batch]);
+             AND (location IS NULL OR ${locExclusion})`, [row.product_id, batch]);
                 const inStock = Number(inStockR.rows[0].count) > 0;
                 if (inStock && currentStatus !== 'ATP') {
                     await this.db.query(`UPDATE outbound_items SET in_process_status = 'ATP' WHERE id = $1`, [row.id]);
@@ -259,6 +274,7 @@ let OutboundService = class OutboundService {
        JOIN products p ON st.product_id = p.id
        WHERE st.product_id = $1
          AND (st.stock_status IN ('Available','Dues In') OR st.stock_status IS NULL OR st.stock_status = '')
+         AND (st.hold_status = 'available' OR st.hold_status IS NULL)
          AND st.quantity > 0
          AND (st.location IS NULL OR st.location NOT IN ('QUA_SHELL','STAGING'))
          ${locClause}
@@ -272,6 +288,7 @@ let OutboundService = class OutboundService {
         const r = await this.db.query(`SELECT COALESCE(SUM(quantity),0) as total FROM stock
        WHERE product_id = $1
          AND (stock_status IN ('Available','Dues In') OR stock_status IS NULL OR stock_status = '')
+         AND (hold_status = 'available' OR hold_status IS NULL)
          AND quantity > 0
          AND (location IS NULL OR location NOT IN ('QUA_SHELL','STAGING'))`, [productId]);
         return Number(r.rows[0].total ?? 0);
@@ -311,8 +328,9 @@ let OutboundService = class OutboundService {
         const fefo = await this.getFEFOAllocation(productId, quantity, location);
         return { available: avail, fefo };
     }
-    async addItemWithFEFO(outboundId, item) {
-        const product = await this.db.query('SELECT uom_type, uom_per_pallet, max_sku_qty, max_trans_qty FROM products WHERE id = $1', [item.product_id]);
+    async addItemWithFEFO(outboundId, item, client) {
+        const db = client ?? this.db;
+        const product = await db.query('SELECT uom_type, uom_per_pallet, max_sku_qty, max_trans_qty FROM products WHERE id = $1', [item.product_id]);
         const productInfo = product.rows[0];
         if (!productInfo)
             throw new api_exception_1.ApiException('Product not found', 409);
@@ -373,7 +391,7 @@ let OutboundService = class OutboundService {
         else {
             locSummary = firstBatch?.location ?? manualLoc;
         }
-        const ins = await this.db.query(`INSERT INTO outbound_items
+        const ins = await db.query(`INSERT INTO outbound_items
          (outbound_order_id, product_id, quantity, uom,
           actual_qty, pallet, batch_no, exp_date, location, notes, od_number, so_number, destination_id, customer_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`, [
@@ -430,7 +448,7 @@ let OutboundService = class OutboundService {
             const outboundId = Number(ins.rows[0].id);
             if (Array.isArray(data.items)) {
                 for (const item of data.items) {
-                    await this.addItemWithFEFO(outboundId, item);
+                    await this.addItemWithFEFO(outboundId, item, client);
                 }
             }
             return outboundId;
@@ -572,6 +590,9 @@ let OutboundService = class OutboundService {
             }
             const destRow = await client.query('SELECT destination_id, outbound_order_id FROM outbound_items WHERE id = $1', [itemId]);
             const destInfo = destRow.rows[0];
+            if (item.order_status === 'Shipped') {
+                await client.query(`DELETE FROM stock_ledger WHERE reference_type='Outbound' AND reference_id=$1 AND product_id=$2`, [destInfo?.outbound_order_id, pid]);
+            }
             await client.query('DELETE FROM outbound_item_locations WHERE outbound_item_id = $1', [itemId]);
             await client.query('DELETE FROM outbound_items WHERE id = $1', [itemId]);
             if (destInfo?.destination_id) {
@@ -664,12 +685,14 @@ let OutboundService = class OutboundService {
                 const needed = Number(item.actual_qty ?? item.quantity ?? 0);
                 const productId = Number(item.product_id);
                 const preferBatch = item.batch_number ?? item.batch_no ?? null;
+                const isCrossDock = Boolean(item.cross_dock_inbound_item_id);
                 const qR = await client.query(`SELECT * FROM stock
            WHERE product_id = $1
              AND (stock_status IN ('Available','Dues In') OR stock_status IS NULL OR stock_status = '')
+             AND (hold_status = 'available' OR hold_status IS NULL)
              AND quantity > 0
              AND location != 'QUA_SHELL'
-             AND location != 'STAGING'
+             ${isCrossDock ? "AND location = 'STAGING'" : "AND location != 'STAGING'"}
            ORDER BY
              CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END ASC,
              expiry_date ASC,

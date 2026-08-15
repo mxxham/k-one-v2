@@ -22,6 +22,7 @@ import {
   Menu,
   X,
   Eye,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { roleLabel } from '@/lib/format';
@@ -69,6 +70,7 @@ const NAV: NavSection[] = [
       { to: '/products', label: 'Products', icon: Box },
       { to: '/customers', label: 'Customers', icon: Users },
       { to: '/locations', label: 'Locations', icon: MapPin },
+      { to: '/zoning', label: 'Zoning', icon: Layers },
     ],
   },
   {
@@ -105,6 +107,7 @@ export default function Layout() {
       products: 'Products',
       customers: 'Customers',
       locations: 'Locations',
+      zoning: 'Zoning',
       reports: 'Reports',
       import: 'Import Excel',
       'import-auto': 'Auto Import',

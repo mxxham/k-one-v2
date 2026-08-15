@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PicklistService } from './picklist.service';
 import { ActivityLogger } from '../common/activity-logger';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 
 type Q = Record<string, any>;
@@ -28,6 +28,7 @@ export class PicklistActions {
     setPermission('picklist', 'complete', 'write');
     setPermission('picklist', 'delete', 'write');
     setPermission('picklist', 'update_item', 'write');
+    setModuleDepartments('picklist', ['outbound']);
   }
 
   private actCtx(ctx: RequestContext) {

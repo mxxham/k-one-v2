@@ -49,6 +49,8 @@ let InboundActions = class InboundActions {
             repair_ledger: (c) => this.repairLedger(c),
         });
         (0, registry_1.setPermission)('inbound', 'delete', 'write');
+        (0, registry_1.setModuleDepartments)('inbound', ['inbound']);
+        (0, registry_1.setActionDepartments)('inbound', 'search_products', ['inbound', 'inventory']);
     }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };
@@ -81,6 +83,12 @@ let InboundActions = class InboundActions {
             it.pallet_locations = locs;
             it.id = Number(it.id);
         }
+        const crossDockOrders = await this.db.query(`SELECT o.id, o.order_number, o.so_number, o.do_number, c.customer_name,
+              COALESCE(o.so_number, o.do_number, o.order_number) AS display_no
+       FROM outbound_orders o
+       LEFT JOIN customers c ON o.customer_id = c.id
+       WHERE o.status IN ('Open','Picking','Picked')
+       ORDER BY o.order_number`);
         return {
             order,
             items,
@@ -88,6 +96,7 @@ let InboundActions = class InboundActions {
             item_pallet_counts: itemPalletCounts,
             users: await this.master.activeUsers(),
             products: await this.master.productOptions(),
+            cross_dock_orders: crossDockOrders.rows,
         };
     }
     async stats(_ctx) {
@@ -203,7 +212,7 @@ let InboundActions = class InboundActions {
         const allowed = ['Dues In', 'Goods Received', 'Unserviceable', 'ATP'];
         if (!allowed.includes(newProcess))
             throw api_exception_1.ApiException.badRequest('Status tidak valid.');
-        await this.inbound.changeItemStatus(itemId, newProcess);
+        await this.inbound.changeItemStatus(itemId, newProcess, ctx.user.id);
         await this.activity.log('UPDATE_ITEM_STATUS', 'inbound', 'Inbound', inboundId, null, `Status item ID ${itemId} → ${newProcess}`, null, null, this.actCtx(ctx));
         return { item_id: itemId, status: newProcess };
     }

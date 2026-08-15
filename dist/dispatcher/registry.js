@@ -5,6 +5,9 @@ exports.getActionHandler = getActionHandler;
 exports.knownModule = knownModule;
 exports.setPermission = setPermission;
 exports.getPermission = getPermission;
+exports.setModuleDepartments = setModuleDepartments;
+exports.setActionDepartments = setActionDepartments;
+exports.getDepartments = getDepartments;
 const registry = new Map();
 function registerActions(module, actions) {
     let m = registry.get(module);
@@ -28,5 +31,16 @@ function setPermission(module, action, level) {
 }
 function getPermission(module, action) {
     return permissions.get(`${module}::${action}`) ?? 'any';
+}
+const departmentDefaults = new Map();
+const departmentOverrides = new Map();
+function setModuleDepartments(module, departments) {
+    departmentDefaults.set(module, departments);
+}
+function setActionDepartments(module, action, departments) {
+    departmentOverrides.set(`${module}::${action}`, departments);
+}
+function getDepartments(module, action) {
+    return departmentOverrides.get(`${module}::${action}`) ?? departmentDefaults.get(module);
 }
 //# sourceMappingURL=registry.js.map

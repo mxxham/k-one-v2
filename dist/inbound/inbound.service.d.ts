@@ -1,4 +1,6 @@
 import { DbService } from '../database/db.service';
+import { PutawayService } from '../putaway/putaway.service';
+import { PicklistService } from '../picklist/picklist.service';
 type Client = any;
 interface InboundItem {
     id: number;
@@ -16,11 +18,14 @@ interface InboundItem {
     pallet?: number;
     manufacture_date?: string | null;
     exp_date?: string | null;
+    cross_dock_outbound_order_id?: number | null;
     [k: string]: any;
 }
 export declare class InboundService {
     private readonly db;
-    constructor(db: DbService);
+    private readonly putaway;
+    private readonly picklist;
+    constructor(db: DbService, putaway: PutawayService, picklist: PicklistService);
     generateNumber(): Promise<string>;
     getAll(status: string | null, limit: number | null, offset: number, odNo: string | null): Promise<any[]>;
     countAll(status: string | null, odNo: string | null): Promise<number>;
@@ -38,7 +43,7 @@ export declare class InboundService {
     updateItem(itemId: number, data: Record<string, any>): Promise<boolean>;
     updateItemDates(itemId: number, manufactureDate: string | null, expDate: string | null): Promise<boolean>;
     updateItemPalletNo(itemId: number, palletNo: string | null): Promise<boolean>;
-    changeItemStatus(itemId: number, newProcess: string): Promise<void>;
+    changeItemStatus(itemId: number, newProcess: string, createdBy?: number): Promise<void>;
     savePalletLocations(itemId: number, pallets: any[]): Promise<void>;
     saveItemLocation(itemId: number, loc: string): Promise<void>;
     advanceStatus(id: number, newStatus: string, receivedById: number, receivedDate: string): Promise<void>;

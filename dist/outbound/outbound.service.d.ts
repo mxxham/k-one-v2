@@ -1,3 +1,4 @@
+import { PoolClient } from 'pg';
 import { DbService } from '../database/db.service';
 import { ActivityLogger } from '../common/activity-logger';
 import { MasterDataService } from '../master/master-data.service';
@@ -20,7 +21,7 @@ export declare class OutboundService {
     getTotalAvailableQty(productId: number): Promise<number>;
     getFEFOAllocation(productId: number, requiredQty: number, location?: string | null): Promise<any>;
     checkStock(productId: number, quantity: number, location?: string | null): Promise<any>;
-    addItemWithFEFO(outboundId: number, item: Record<string, any>): Promise<number>;
+    addItemWithFEFO(outboundId: number, item: Record<string, any>, client?: PoolClient): Promise<number>;
     calculatePallet(quantity: number, uomPerPallet: number): number;
     create(data: Record<string, any>): Promise<number>;
     update(id: number, data: Record<string, any>, currentUserId?: number | null): Promise<void>;

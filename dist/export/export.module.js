@@ -16,12 +16,13 @@ const outbound_module_1 = require("../outbound/outbound.module");
 const picklist_module_1 = require("../picklist/picklist.module");
 const report_module_1 = require("../report/report.module");
 const stocktake_module_1 = require("../stocktake/stocktake.module");
+const asn_module_1 = require("../asn/asn.module");
 let ExportModule = class ExportModule {
 };
 exports.ExportModule = ExportModule;
 exports.ExportModule = ExportModule = __decorate([
     (0, common_1.Module)({
-        imports: [inbound_module_1.InboundModule, outbound_module_1.OutboundModule, picklist_module_1.PicklistModule, report_module_1.ReportModule, stocktake_module_1.StockTakeModule],
+        imports: [inbound_module_1.InboundModule, outbound_module_1.OutboundModule, picklist_module_1.PicklistModule, report_module_1.ReportModule, stocktake_module_1.StockTakeModule, asn_module_1.AsnModule],
         providers: [excel_export_service_1.ExcelExportService, print_service_1.PrintService, export_actions_1.ExportActions],
     })
 ], ExportModule);

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { BinTransferService } from './bintransfer.service';
 import { ActivityLogger } from '../common/activity-logger';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 
 type Q = Record<string, any>;
@@ -24,6 +24,7 @@ export class BinTransferActions {
     setPermission('bintransfer', 'create', 'write');
     setPermission('bintransfer', 'execute', 'write');
     setPermission('bintransfer', 'cancel', 'write');
+    setModuleDepartments('bintransfer', ['inventory']);
   }
 
   private actCtx(ctx: RequestContext) {

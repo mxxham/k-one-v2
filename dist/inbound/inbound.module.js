@@ -11,12 +11,14 @@ const common_1 = require("@nestjs/common");
 const inbound_service_1 = require("./inbound.service");
 const inbound_actions_1 = require("./inbound.actions");
 const master_module_1 = require("../master/master.module");
+const putaway_module_1 = require("../putaway/putaway.module");
+const picklist_module_1 = require("../picklist/picklist.module");
 let InboundModule = class InboundModule {
 };
 exports.InboundModule = InboundModule;
 exports.InboundModule = InboundModule = __decorate([
     (0, common_1.Module)({
-        imports: [master_module_1.MasterModule],
+        imports: [master_module_1.MasterModule, putaway_module_1.PutawayModule, picklist_module_1.PicklistModule],
         providers: [inbound_service_1.InboundService, inbound_actions_1.InboundActions],
         exports: [inbound_service_1.InboundService],
     })

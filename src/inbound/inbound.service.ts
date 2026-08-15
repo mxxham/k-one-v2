@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DbService } from '../database/db.service';
+import { PutawayService } from '../putaway/putaway.service';
+import { PicklistService } from '../picklist/picklist.service';
 import { generateNumber } from '../common/number-gen';
 import { todayStr, nowDatetime, addYears } from '../common/date-util';
 import { ApiException } from '../common/api-exception';
@@ -23,12 +25,17 @@ interface InboundItem {
   pallet?: number;
   manufacture_date?: string | null;
   exp_date?: string | null;
+  cross_dock_outbound_order_id?: number | null;
   [k: string]: any;
 }
 
 @Injectable()
 export class InboundService {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly putaway: PutawayService,
+    private readonly picklist: PicklistService,
+  ) {}
 
   async generateNumber(): Promise<string> {
     return generateNumber(this.db, {
@@ -111,9 +118,11 @@ export class InboundService {
 
   async getItems(inboundId: number): Promise<InboundItem[]> {
     const r = await this.db.query(
-      `SELECT ii.*, p.product_code, p.product_name, p.uom_type, p.uom_per_pallet
+      `SELECT ii.*, p.product_code, p.product_name, p.uom_type, p.uom_per_pallet,
+              ob.order_number AS cross_dock_order_number, ob.status AS cross_dock_order_status
        FROM inbound_items ii
        JOIN products p ON ii.product_id = p.id
+       LEFT JOIN outbound_orders ob ON ob.id = ii.cross_dock_outbound_order_id
        WHERE ii.inbound_order_id = $1
        ORDER BY ii.id`,
       [inboundId],
@@ -162,12 +171,23 @@ export class InboundService {
         }
       }
 
+      // ASN linking: receiving staff may create an inbound against a Pending ASN.
+      const asnId = data.asn_id ? Number(data.asn_id) : null;
+      if (asnId) {
+        const asnR = await client.query('SELECT id, status FROM asn WHERE id = $1', [asnId]);
+        const asn = asnR.rows[0];
+        if (!asn) throw ApiException.notFound('ASN tidak ditemukan');
+        if (asn.status !== 'Pending') {
+          throw ApiException.conflict('Hanya ASN berstatus Pending yang dapat dijadikan inbound.');
+        }
+      }
+
       const r = await client.query(
         `INSERT INTO inbound_orders
            (order_number, order_date, carrier_name, po_number, shipment_no, do_number,
             container_no, armada_no, production_date, expected_date,
-            received_by, received_date, status, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+            received_by, received_date, status, notes, created_by, asn_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
         [
           inboundNumber,
           data.order_date,
@@ -184,14 +204,31 @@ export class InboundService {
           data.status ?? 'Draft',
           data.notes ?? null,
           data.created_by,
+          asnId,
         ],
       );
       const inboundId = Number(r.rows[0].id);
 
-      if (Array.isArray(data.items)) {
-        for (const item of data.items) {
-          await this.addItem(inboundId, item, client);
-        }
+      // Pre-fill items from the ASN's expected lines when none are provided, so
+      // receiving staff confirm against expectation rather than typing fresh.
+      let items: Record<string, any>[] = Array.isArray(data.items) ? data.items : [];
+      if (items.length === 0 && asnId) {
+        const asnItems = await client.query(
+          `SELECT product_id, expected_qty, uom, batch_number, exp_date
+           FROM asn_items WHERE asn_id = $1 ORDER BY id`,
+          [asnId],
+        );
+        items = asnItems.rows.map((ai: any) => ({
+          product_id: Number(ai.product_id),
+          quantity: Number(ai.expected_qty),
+          uom: ai.uom,
+          batch_number: ai.batch_number,
+          exp_date: ai.exp_date,
+          in_process_status: 'Dues In',
+        }));
+      }
+      for (const item of items) {
+        await this.addItem(inboundId, item, client);
       }
       return inboundId;
     });
@@ -230,8 +267,9 @@ export class InboundService {
       `INSERT INTO inbound_items
          (inbound_order_id, od_number, so_number, product_id, batch_number, location,
           quantity, uom, actual_qty, pallet, pallet_no,
-          manufacture_date, exp_date, stock_status, in_process_status, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+          manufacture_date, exp_date, stock_status, in_process_status, notes,
+          cross_dock_outbound_order_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
       [
         inboundId,
         item.od_number ?? null,
@@ -249,6 +287,7 @@ export class InboundService {
         item.stock_status ?? 'Pending',
         item.in_process_status ?? 'Dues In',
         item.notes ?? null,
+        item.cross_dock_outbound_order_id ? Number(item.cross_dock_outbound_order_id) : null,
       ],
     );
     const itemId = Number(r.rows[0].id);
@@ -361,8 +400,9 @@ export class InboundService {
     const r = await this.db.query(
       `UPDATE inbound_items SET
          batch_number = $1, location = $2, quantity = $3, uom = $4, actual_qty = $5,
-         manufacture_date = $6, exp_date = $7, stock_status = $8, notes = $9
-       WHERE id = $10`,
+         manufacture_date = $6, exp_date = $7, stock_status = $8, notes = $9,
+         cross_dock_outbound_order_id = $10
+       WHERE id = $11`,
       [
         data.batch_number ?? data.batch_no ?? null,
         data.location ?? null,
@@ -373,6 +413,7 @@ export class InboundService {
         data.exp_date ?? null,
         data.stock_status ?? 'Accepted',
         data.notes ?? null,
+        data.cross_dock_outbound_order_id ? Number(data.cross_dock_outbound_order_id) : null,
         itemId,
       ],
     );
@@ -420,7 +461,7 @@ export class InboundService {
   // --------------------------------------------------------------------------
   // real-time receive flow (mirrors inbound_change_item_status)
   // --------------------------------------------------------------------------
-  async changeItemStatus(itemId: number, newProcess: string): Promise<void> {
+  async changeItemStatus(itemId: number, newProcess: string, createdBy?: number): Promise<void> {
     const stockBadge: Record<string, string> = {
       'Dues In': 'Pending',
       'Goods Received': 'Pending',
@@ -446,122 +487,160 @@ export class InboundService {
     const uomPerPlt = Math.max(1, Number(it.uom_per_pallet ?? 4));
     const plt = Math.ceil(totalQty / uomPerPlt);
 
-    if (newProcess === 'Unserviceable') {
-      await this.db.query(
-        `UPDATE inbound_items SET in_process_status=$1, stock_status=$2, location='QUA_SHELL' WHERE id=$3`,
-        [newProcess, newBadge, itemId],
-      );
-    } else if (oldProcess === 'Unserviceable') {
-      await this.db.query(
-        `UPDATE inbound_items SET in_process_status=$1, stock_status=$2, location=NULL WHERE id=$3`,
-        [newProcess, newBadge, itemId],
-      );
-    } else {
-      await this.db.query(
-        `UPDATE inbound_items SET in_process_status=$1, stock_status=$2 WHERE id=$3`,
-        [newProcess, newBadge, itemId],
-      );
-    }
-
-    const delLedger = async (): Promise<void> => {
-      await this.db.query(
-        `DELETE FROM stock_ledger
-         WHERE reference_type='Inbound' AND reference_id=$1 AND product_id=$2 AND batch_number IS NOT DISTINCT FROM $3`,
-        [it.io_id, pid, batch],
-      );
-    };
-    const runningBal = async (): Promise<number> => {
-      const b = await this.db.query(
-        `SELECT COALESCE(SUM(quantity_in),0) - COALESCE(SUM(quantity_out),0) AS bal
-         FROM stock_ledger WHERE product_id=$1
-           AND (location IS NULL OR location != 'QUA_SHELL')
-           AND transaction_type NOT IN ('TRANSFER_IN','TRANSFER_OUT')`,
-        [pid],
-      );
-      return Number(b.rows[0].bal ?? 0);
-    };
-    const insertLedger = async (notes: string, qtyIn: number, loc: string | null, balance: number): Promise<void> => {
-      await this.db.query(
-        `INSERT INTO stock_ledger
-           (transaction_date, product_id, transaction_type, reference_type, reference_id,
-            reference_number, batch_number, quantity_in, quantity_out, uom, pallet, balance, location, notes)
-         VALUES ($1,$2,'IN','Inbound',$3,$4,$5,$6,0,$7,$8,$9,$10,$11)`,
-        [todayStr(), pid, it.io_id, it.order_number, batch, qtyIn, it.uom, plt, balance, loc, notes],
-      );
-    };
-
-    if (newProcess === 'ATP') {
-      await this.db.query(
-        `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
-        [itemId],
-      );
-      await this.db.query('UPDATE stock_locations SET stock_id=NULL WHERE inbound_item_id=$1', [itemId]);
-      if (oldProcess === 'Unserviceable') {
-        await this.db.query(
-          `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND location='QUA_SHELL' AND stock_status='Rejected'`,
-          [pid, batch],
+    await this.db.transaction(async (client) => {
+      if (newProcess === 'Unserviceable') {
+        await client.query(
+          `UPDATE inbound_items SET in_process_status=$1, stock_status=$2, location='QUA_SHELL' WHERE id=$3`,
+          [newProcess, newBadge, itemId],
+        );
+      } else if (oldProcess === 'Unserviceable') {
+        await client.query(
+          `UPDATE inbound_items SET in_process_status=$1, stock_status=$2, location=NULL WHERE id=$3`,
+          [newProcess, newBadge, itemId],
+        );
+      } else {
+        await client.query(
+          `UPDATE inbound_items SET in_process_status=$1, stock_status=$2 WHERE id=$3`,
+          [newProcess, newBadge, itemId],
         );
       }
-      await delLedger();
-      const cur = await runningBal();
-      await insertLedger(`[Inbound] ATP | In-Process: ATP | ${it.order_number}`, totalQty, it.location ?? null, cur + totalQty);
-    } else if (newProcess === 'Goods Received') {
-      if (oldProcess === 'ATP') {
-        await this.db.query(
+
+      const delLedger = async (): Promise<void> => {
+        await client.query(
+          `DELETE FROM stock_ledger
+           WHERE reference_type='Inbound' AND reference_id=$1 AND product_id=$2 AND batch_number IS NOT DISTINCT FROM $3`,
+          [it.io_id, pid, batch],
+        );
+      };
+      const runningBal = async (): Promise<number> => {
+        const b = await client.query(
+          `SELECT COALESCE(SUM(quantity_in),0) - COALESCE(SUM(quantity_out),0) AS bal
+           FROM stock_ledger WHERE product_id=$1
+             AND (location IS NULL OR location != 'QUA_SHELL')
+             AND transaction_type NOT IN ('TRANSFER_IN','TRANSFER_OUT')`,
+          [pid],
+        );
+        return Number(b.rows[0].bal ?? 0);
+      };
+      const insertLedger = async (notes: string, qtyIn: number, loc: string | null, balance: number): Promise<void> => {
+        await client.query(
+          `INSERT INTO stock_ledger
+             (transaction_date, product_id, transaction_type, reference_type, reference_id,
+              reference_number, batch_number, quantity_in, quantity_out, uom, pallet, balance, location, notes)
+           VALUES ($1,$2,'IN','Inbound',$3,$4,$5,$6,0,$7,$8,$9,$10,$11)`,
+          [todayStr(), pid, it.io_id, it.order_number, batch, qtyIn, it.uom, plt, balance, loc, notes],
+        );
+      };
+
+      const crossDockObId = it.cross_dock_outbound_order_id ? Number(it.cross_dock_outbound_order_id) : null;
+
+      if (newProcess === 'ATP') {
+        await client.query(
           `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
           [itemId],
         );
-        await this.db.query('UPDATE stock_locations SET stock_id=NULL WHERE inbound_item_id=$1', [itemId]);
-        await this.db.query(
-          `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND stock_status='Available'`,
+        await client.query('UPDATE stock_locations SET stock_id=NULL WHERE inbound_item_id=$1', [itemId]);
+        if (oldProcess === 'Unserviceable') {
+          await client.query(
+            `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND location='QUA_SHELL' AND stock_status='Rejected'`,
+            [pid, batch],
+          );
+        }
+        await delLedger();
+        if (crossDockObId) {
+          // Cross-dock: bypass normal putaway/FEFO. Stage directly at the
+          // dedicated STAGING location (reused special loc) and attach a
+          // picklist item to the linked outbound order. No general stock row is
+          // created — the goods are pre-allocated/pre-sold to that outbound.
+          const cur = await runningBal();
+          await insertLedger(
+            `[Inbound] Cross-Dock | STAGING → Outbound | ${it.order_number}`,
+            totalQty,
+            'STAGING',
+            cur + totalQty,
+          );
+          const slIns = await client.query(
+            `INSERT INTO stock_locations (stock_id, location_code, pallet_seq, quantity, original_quantity, uom, is_full_pallet, batch_number, inbound_item_id, status)
+             VALUES (NULL, 'STAGING', 1, $1, $1, $2, 1, $3, $4, 'Available') RETURNING id`,
+            [totalQty, it.uom ?? 'Drum', batch, itemId],
+          );
+          await client.query(
+            `UPDATE inbound_items SET location='STAGING' WHERE id=$1`,
+            [itemId],
+          );
+          await this.picklist.addCrossDockItem(
+            client,
+            crossDockObId,
+            pid,
+            totalQty,
+            it.uom ?? 'Drum',
+            batch,
+            createdBy ?? it.created_by ?? 0,
+            Number(slIns.rows[0].id),
+          );
+        } else {
+          const cur = await runningBal();
+          await insertLedger(`[Inbound] ATP | In-Process: ATP | ${it.order_number}`, totalQty, it.location ?? null, cur + totalQty);
+        }
+      } else if (newProcess === 'Goods Received') {
+        if (oldProcess === 'ATP') {
+          await client.query(
+            `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
+            [itemId],
+          );
+          await client.query('UPDATE stock_locations SET stock_id=NULL WHERE inbound_item_id=$1', [itemId]);
+          await client.query(
+            `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND stock_status='Available'`,
+            [pid, batch],
+          );
+        }
+        if (oldProcess === 'Unserviceable') {
+          await client.query(
+            `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND location='QUA_SHELL' AND stock_status='Rejected'`,
+            [pid, batch],
+          );
+        }
+        await delLedger();
+        const cur = await runningBal();
+        await insertLedger(`[Inbound] Goods Received | In-Process: Goods Received | ${it.order_number}`, totalQty, it.location ?? null, cur + totalQty);
+      } else if (newProcess === 'Unserviceable') {
+        await client.query(
+          `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
+          [itemId],
+        );
+        await client.query('DELETE FROM stock_locations WHERE inbound_item_id=$1', [itemId]);
+        await client.query(
+          `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND stock_status IN ('Available','Dues In','Pending')`,
           [pid, batch],
         );
-      }
-      if (oldProcess === 'Unserviceable') {
-        await this.db.query(
-          `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND location='QUA_SHELL' AND stock_status='Rejected'`,
+        await client.query(
+          `INSERT INTO stock (product_id,batch_number,location,quantity,uom,pallet,manufacture_date,expiry_date,stock_status)
+           VALUES ($1,$2,'QUA_SHELL',$3,$4,$5,$6,$7,'Rejected')`,
+          [pid, batch, totalQty, it.uom, plt, it.manufacture_date, it.exp_date],
+        );
+        await delLedger();
+        const cur = await runningBal();
+        await insertLedger(`[Inbound] Unserviceable (QUA_SHELL) | In-Process: Unserviceable | ${it.order_number}`, totalQty, 'QUA_SHELL', cur);
+      } else if (newProcess === 'Dues In') {
+        await client.query(
+          `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
+          [itemId],
+        );
+        await client.query('UPDATE stock_locations SET stock_id=NULL WHERE inbound_item_id=$1', [itemId]);
+        await client.query(
+          `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND stock_status IN ('Available','Dues In','Pending','Rejected')`,
           [pid, batch],
         );
+        await delLedger();
       }
-      await delLedger();
-      const cur = await runningBal();
-      await insertLedger(`[Inbound] Goods Received | In-Process: Goods Received | ${it.order_number}`, totalQty, it.location ?? null, cur + totalQty);
-    } else if (newProcess === 'Unserviceable') {
-      await this.db.query(
-        `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
-        [itemId],
-      );
-      await this.db.query('DELETE FROM stock_locations WHERE inbound_item_id=$1', [itemId]);
-      await this.db.query(
-        `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND stock_status IN ('Available','Dues In','Pending')`,
-        [pid, batch],
-      );
-      await this.db.query(
-        `INSERT INTO stock (product_id,batch_number,location,quantity,uom,pallet,manufacture_date,expiry_date,stock_status)
-         VALUES ($1,$2,'QUA_SHELL',$3,$4,$5,$6,$7,'Rejected')`,
-        [pid, batch, totalQty, it.uom, plt, it.manufacture_date, it.exp_date],
-      );
-      await delLedger();
-      const cur = await runningBal();
-      await insertLedger(`[Inbound] Unserviceable (QUA_SHELL) | In-Process: Unserviceable | ${it.order_number}`, totalQty, 'QUA_SHELL', cur);
-    } else if (newProcess === 'Dues In') {
-      await this.db.query(
-        `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
-        [itemId],
-      );
-      await this.db.query('UPDATE stock_locations SET stock_id=NULL WHERE inbound_item_id=$1', [itemId]);
-      await this.db.query(
-        `DELETE FROM stock WHERE product_id=$1 AND batch_number IS NOT DISTINCT FROM $2 AND stock_status IN ('Available','Dues In','Pending','Rejected')`,
-        [pid, batch],
-      );
-      await delLedger();
-    }
+    });
   }
 
   async savePalletLocations(itemId: number, pallets: any[]): Promise<void> {
     const db = this.db;
     const specialLocs = ['QUA_SHELL', 'STAGING'];
     const invalidLocs: string[] = [];
+    const invalidRules: string[] = [];
     for (const p of pallets) {
       const pLoc = String(p.location_code ?? '').trim().toUpperCase();
       if (pLoc && !specialLocs.includes(pLoc)) {
@@ -569,10 +648,29 @@ export class InboundService {
           'SELECT id FROM location_master WHERE location_code=$1 AND is_active=1 LIMIT 1',
           [pLoc],
         );
-        if (locCheck.rows.length === 0) invalidLocs.push(pLoc);
+        if (locCheck.rows.length === 0) {
+          invalidLocs.push(pLoc);
+          continue;
+        }
+        const itemInfo = await db.query(
+          `SELECT ii.product_id, ii.uom, p.uom_type
+           FROM inbound_items ii JOIN products p ON p.id = ii.product_id WHERE ii.id = $1`,
+          [itemId],
+        );
+        const itInfo = itemInfo.rows[0];
+        if (itInfo) {
+          const val = await this.putaway.validatePlacement(
+            Number(itInfo.product_id),
+            pLoc,
+            Number(p.quantity ?? 0),
+            String(itInfo.uom || itInfo.uom_type || 'Drum'),
+          );
+          if (!val.valid) invalidRules.push(`${pLoc}: ${val.reasons.join('; ')}`);
+        }
       }
     }
     if (invalidLocs.length > 0) throw ApiException.badRequest('Lokasi tidak valid: ' + invalidLocs.join(', '));
+    if (invalidRules.length > 0) throw ApiException.badRequest('Lokasi ditolak aturan putaway: ' + invalidRules.join(' | '));
 
     await db.query('DELETE FROM stock_locations WHERE inbound_item_id=$1', [itemId]);
     const itRow = await db.query('SELECT * FROM inbound_items WHERE id=$1', [itemId]);
@@ -894,6 +992,14 @@ export class InboundService {
       }
 
       await client.query(`UPDATE inbound_orders SET status='Completed' WHERE id=$1`, [id]);
+
+      // ASN linkage: a Pending ASN flips to Received once its inbound completes.
+      if (inbound?.asn_id) {
+        await client.query(
+          `UPDATE asn SET status='Received', updated_at=NOW() WHERE id=$1 AND status='Pending'`,
+          [inbound.asn_id],
+        );
+      }
     });
   }
 

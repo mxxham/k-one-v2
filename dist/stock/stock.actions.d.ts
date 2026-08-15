@@ -20,5 +20,11 @@ export declare class StockActions {
     private adjustStock;
     private ledgerList;
     private ledgerRepairAll;
+    private static readonly HOLD_STATUSES;
+    private hold;
+    private release;
+    private addHoldLedger;
+    private scan;
+    private scanOverride;
     private actCtx;
 }

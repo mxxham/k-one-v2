@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 import { ActivityLogger } from '../common/activity-logger';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments, setActionDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 import { MasterDataService } from '../master/master-data.service';
 import { todayStr } from '../common/date-util';
@@ -24,14 +24,26 @@ export class StockActions {
       locations: (c) => this.locations(c),
       transfer: (c) => this.transfer(c),
       adjust: (c) => this.adjust(c),
+      hold: (c) => this.hold(c),
+      release: (c) => this.release(c),
+      scan: (c) => this.scan(c),
+      scan_override: (c) => this.scanOverride(c),
     });
     setPermission('stock', 'transfer', 'write');
     setPermission('stock', 'adjust', 'admin');
+    setPermission('stock', 'hold', 'write');
+    setPermission('stock', 'release', 'write');
+    setPermission('stock', 'scan', 'any');
+    setPermission('stock', 'scan_override', 'write');
+    setModuleDepartments('stock', ['inventory']);
+    setActionDepartments('stock', 'scan', ['inbound', 'outbound', 'inventory']);
+    setActionDepartments('stock', 'scan_override', ['inbound', 'outbound', 'inventory']);
     registerActions('ledger', {
       list: (c) => this.ledgerList(c),
       repair_all: (c) => this.ledgerRepairAll(c),
     });
     setPermission('ledger', 'repair_all', 'admin');
+    setModuleDepartments('ledger', ['inventory']);
   }
 
   // ---------------------------------------------------------------------------
@@ -42,8 +54,10 @@ export class StockActions {
     const expiring = ctx.query.expiring === '1' || ctx.query.expiring === 'true';
     const search = String(ctx.query.q ?? '').trim().toLowerCase();
     const location = String(ctx.query.location ?? '').trim();
+    const yearRaw = String(ctx.query.year ?? '').trim();
+    const year = /^\d{4}$/.test(yearRaw) ? Number(yearRaw) : null;
 
-    let sql = `SELECT s.*, p.product_code, p.product_name, p.category, p.uom_type, p.uom_per_pallet
+    let sql = `SELECT s.*, p.product_code, p.product_name, p.category, p.uom_type, p.uom_per_pallet, p.velocity_class
                FROM stock s
                JOIN products p ON s.product_id = p.id
                WHERE s.quantity > 0`;
@@ -51,6 +65,10 @@ export class StockActions {
     if (status) {
       params.push(status);
       sql += ` AND s.stock_status = $${params.length}`;
+    }
+    if (year) {
+      params.push(year);
+      sql += ` AND EXTRACT(YEAR FROM s.expiry_date) = $${params.length}`;
     }
     if (expiring) {
       sql += ` AND s.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '90 days' ORDER BY s.expiry_date ASC`;
@@ -332,6 +350,148 @@ export class StockActions {
       }
     });
     await this.activity.log('REPAIR_LEDGER', 'ledger', 'Ledger', null, null, 'Perbaiki seluruh data ledger', null, null, this.actCtx(ctx));
+    return { ok: true };
+  }
+
+  // ---------------------------------------------------------------------------
+  // hold / release (Phase 1 — stock hold & quarantine)
+  // ---------------------------------------------------------------------------
+  private static readonly HOLD_STATUSES = ['on_hold', 'quarantine', 'damaged'];
+
+  private async hold(ctx: RequestContext): Promise<Q> {
+    const d = ctx.body;
+    const stockId = Number.parseInt(d.stock_id ?? '0', 10) || 0;
+    const status = String(d.status ?? '').trim().toLowerCase();
+    const reason = String(d.reason ?? '').trim();
+    if (!stockId) throw ApiException.badRequest('stock_id wajib diisi.');
+    if (!StockActions.HOLD_STATUSES.includes(status)) {
+      throw ApiException.badRequest(`status harus salah satu dari: ${StockActions.HOLD_STATUSES.join(', ')}`);
+    }
+    if (!reason) throw ApiException.badRequest('Alasan hold wajib diisi.');
+    const stock = await this.getById(stockId);
+    if (!stock) throw ApiException.badRequest('Stock tidak ditemukan.');
+    if (String(stock.hold_status ?? 'available') === status) {
+      throw ApiException.badRequest(`Stock sudah berstatus ${status}.`);
+    }
+
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `UPDATE stock SET hold_status = $1, hold_reason = $2, hold_by = $3, hold_at = NOW(), updated_at = NOW() WHERE id = $4`,
+        [status, reason, ctx.user.id, stockId],
+      );
+      await this.addHoldLedger(client, stock, status, reason, ctx, stockId);
+    });
+    await this.activity.log(
+      'STOCK_HOLD', 'stock', 'Stock', stockId, null,
+      `Hold stok ID ${stockId} → ${status} (${reason})`,
+      { hold_status: stock.hold_status ?? 'available' }, { hold_status: status }, this.actCtx(ctx),
+    );
+    return { ok: true };
+  }
+
+  private async release(ctx: RequestContext): Promise<Q> {
+    const d = ctx.body;
+    const stockId = Number.parseInt(d.stock_id ?? '0', 10) || 0;
+    const reason = String(d.reason ?? '').trim();
+    if (!stockId) throw ApiException.badRequest('stock_id wajib diisi.');
+    const stock = await this.getById(stockId);
+    if (!stock) throw ApiException.badRequest('Stock tidak ditemukan.');
+    const curStatus = String(stock.hold_status ?? 'available');
+    if (curStatus === 'available') throw ApiException.badRequest('Stock tidak sedang di-hold.');
+
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `UPDATE stock SET hold_status = 'available', hold_reason = NULL, hold_by = NULL, hold_at = NULL, updated_at = NOW() WHERE id = $1`,
+        [stockId],
+      );
+      await this.addHoldLedger(client, stock, 'available', reason, ctx, stockId);
+    });
+    await this.activity.log(
+      'STOCK_RELEASE', 'stock', 'Stock', stockId, null,
+      `Release stok ID ${stockId}${reason ? ` (${reason})` : ''}`,
+      { hold_status: curStatus }, { hold_status: 'available' }, this.actCtx(ctx),
+    );
+    return { ok: true };
+  }
+
+  private async addHoldLedger(client: any, stock: any, status: string, reason: string, ctx: RequestContext, stockId: number): Promise<void> {
+    const balR = await client.query(
+      `SELECT COALESCE(SUM(quantity_in),0) - COALESCE(SUM(quantity_out),0) AS running_balance
+       FROM stock_ledger WHERE product_id = $1`,
+      [stock.product_id],
+    );
+    const balance = Number(balR.rows[0]?.running_balance ?? 0);
+    const isRelease = status === 'available';
+    const type = isRelease ? 'RELEASE' : 'HOLD';
+    await client.query(
+      `INSERT INTO stock_ledger
+         (transaction_date, product_id, transaction_type, reference_type,
+          reference_id, reference_number, batch_number, quantity_in,
+          quantity_out, uom, balance, location, notes)
+       VALUES (CURRENT_DATE,$1,$2,'Stock',$3,NULL,$4,0,0,$5,$6,$7,$8)`,
+      [
+        stock.product_id,
+        type,
+        stockId,
+        stock.batch_number,
+        stock.uom_type ?? stock.uom,
+        balance,
+        stock.location,
+        isRelease
+          ? `Stock ${stockId} di-release${reason ? `: ${reason}` : ''} oleh ${ctx.user.username}`
+          : `Stock ${stockId} di-hold (${status})${reason ? `: ${reason}` : ''} oleh ${ctx.user.username}`,
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // scan (Phase 2 — barcode scanning UX)
+  // ---------------------------------------------------------------------------
+  private async scan(ctx: RequestContext): Promise<Q> {
+    const code = String(ctx.query.code ?? ctx.body.code ?? '').trim();
+    if (!code) throw ApiException.badRequest('Kode wajib diisi.');
+    const r = await this.db.query(
+      `SELECT p.id, p.product_code, p.product_name, p.uom_type, p.uom_per_pallet,
+              p.default_location,
+              COALESCE((SELECT s.location FROM stock s
+                        WHERE s.product_id = p.id AND s.stock_status = 'Available'
+                          AND (s.hold_status = 'available' OR s.hold_status IS NULL)
+                          AND s.quantity > 0 AND s.location NOT IN ('QUA_SHELL','STAGING')
+                        ORDER BY s.expiry_date ASC NULLS LAST, s.id ASC
+                        LIMIT 1), p.default_location) AS expected_location
+       FROM products p
+       WHERE p.product_code = $1 AND p.is_active = 1
+       LIMIT 1`,
+      [code],
+    );
+    const row = r.rows[0];
+    if (!row) return { found: false, code };
+    return {
+      found: true,
+      code,
+      product: {
+        id: Number(row.id),
+        product_code: row.product_code,
+        product_name: row.product_name,
+        uom_type: row.uom_type,
+        uom_per_pallet: Number(row.uom_per_pallet),
+        default_location: row.default_location ?? null,
+      },
+      expected_location: row.expected_location ?? null,
+    };
+  }
+
+  private async scanOverride(ctx: RequestContext): Promise<Q> {
+    const code = String(ctx.body.code ?? '').trim();
+    const reason = String(ctx.body.reason ?? '').trim();
+    const context = String(ctx.body.context ?? '').trim();
+    if (!code) throw ApiException.badRequest('Kode wajib diisi.');
+    if (!reason) throw ApiException.badRequest('Alasan override wajib diisi.');
+    await this.activity.log(
+      'SCAN_OVERRIDE', 'stock', 'Stock', null, null,
+      `Scan mismatch di-override${context ? ` [${context}]` : ''}: '${code}' — ${reason}`,
+      { scanned: code, context: context || null }, { reason }, this.actCtx(ctx),
+    );
     return { ok: true };
   }
 

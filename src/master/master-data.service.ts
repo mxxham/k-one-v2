@@ -97,6 +97,7 @@ export class MasterDataService {
        ORDER BY lm.aisle, lm.rack, lm.row_name, lm.position`,
     );
     return r.rows.map((l) => ({
+      id: l.id,
       location_code: l.location_code,
       aisle: l.aisle,
       zone: l.zone,

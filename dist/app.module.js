@@ -21,6 +21,12 @@ const picklist_module_1 = require("./picklist/picklist.module");
 const report_module_1 = require("./report/report.module");
 const stocktake_module_1 = require("./stocktake/stocktake.module");
 const bintransfer_module_1 = require("./bintransfer/bintransfer.module");
+const replenishment_module_1 = require("./replenishment/replenishment.module");
+const putaway_module_1 = require("./putaway/putaway.module");
+const waves_module_1 = require("./waves/waves.module");
+const asn_module_1 = require("./asn/asn.module");
+const abc_module_1 = require("./abc/abc.module");
+const cyclecount_module_1 = require("./cyclecount/cyclecount.module");
 const import_module_1 = require("./import/import.module");
 const export_module_1 = require("./export/export.module");
 let AppModule = class AppModule {
@@ -28,7 +34,7 @@ let AppModule = class AppModule {
 exports.AppModule = AppModule;
 exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
-        imports: [config_module_1.ConfigModule, database_module_1.DatabaseModule, common_module_1.CommonModule, dispatcher_module_1.DispatcherModule, auth_module_1.AuthModule, master_module_1.MasterModule, stock_module_1.StockModule, inbound_module_1.InboundModule, outbound_module_1.OutboundModule, picklist_module_1.PicklistModule, report_module_1.ReportModule, stocktake_module_1.StockTakeModule, bintransfer_module_1.BinTransferModule, import_module_1.ImportModule, export_module_1.ExportModule],
+        imports: [config_module_1.ConfigModule, database_module_1.DatabaseModule, common_module_1.CommonModule, dispatcher_module_1.DispatcherModule, auth_module_1.AuthModule, master_module_1.MasterModule, stock_module_1.StockModule, inbound_module_1.InboundModule, outbound_module_1.OutboundModule, picklist_module_1.PicklistModule, report_module_1.ReportModule, stocktake_module_1.StockTakeModule, bintransfer_module_1.BinTransferModule, replenishment_module_1.ReplenishmentModule, putaway_module_1.PutawayModule, waves_module_1.WavesModule, asn_module_1.AsnModule, abc_module_1.AbcModule, cyclecount_module_1.CycleCountModule, import_module_1.ImportModule, export_module_1.ExportModule],
     })
 ], AppModule);
 //# sourceMappingURL=app.module.js.map

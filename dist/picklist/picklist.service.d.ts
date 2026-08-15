@@ -4,6 +4,9 @@ export declare class PicklistService {
     constructor(db: DbService);
     generateNumber(): Promise<string>;
     createFromOutbound(outboundId: number, createdBy: number): Promise<number>;
+    createFromOrders(outboundIds: number[], createdBy: number, waveId: number, client?: any): Promise<number>;
+    private insertPicklistItems;
+    addCrossDockItem(client: any, outboundOrderId: number, productId: number, quantity: number, uom: string, batchNumber: string | null, createdBy: number, stockLocationId: number | null): Promise<number>;
     calculatePalletDistribution(quantity: number, uomPerPallet: number): Array<{
         quantity: number;
         is_full: boolean;

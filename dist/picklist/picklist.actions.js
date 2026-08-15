@@ -37,6 +37,7 @@ let PicklistActions = class PicklistActions {
         (0, registry_1.setPermission)('picklist', 'complete', 'write');
         (0, registry_1.setPermission)('picklist', 'delete', 'write');
         (0, registry_1.setPermission)('picklist', 'update_item', 'write');
+        (0, registry_1.setModuleDepartments)('picklist', ['outbound']);
     }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };

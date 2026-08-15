@@ -48,6 +48,7 @@ const bcrypt = __importStar(require("bcryptjs"));
 const db_service_1 = require("../database/db.service");
 const activity_logger_1 = require("../common/activity-logger");
 const registry_1 = require("../dispatcher/registry");
+const guards_1 = require("../auth/guards");
 const api_exception_1 = require("../common/api-exception");
 const master_data_service_1 = require("./master-data.service");
 let MasterActions = class MasterActions {
@@ -69,6 +70,7 @@ let MasterActions = class MasterActions {
         (0, registry_1.setPermission)('products', 'create', 'write');
         (0, registry_1.setPermission)('products', 'update', 'write');
         (0, registry_1.setPermission)('products', 'delete', 'admin');
+        (0, registry_1.setModuleDepartments)('products', ['all']);
         (0, registry_1.registerActions)('customers', {
             list: (c) => this.customerList(c),
             all: (c) => this.customerAll(c),
@@ -80,6 +82,8 @@ let MasterActions = class MasterActions {
         (0, registry_1.setPermission)('customers', 'create', 'write');
         (0, registry_1.setPermission)('customers', 'update', 'write');
         (0, registry_1.setPermission)('customers', 'delete', 'write');
+        (0, registry_1.setModuleDepartments)('customers', ['all']);
+        (0, registry_1.setActionDepartments)('customers', 'all', ['outbound']);
         (0, registry_1.registerActions)('locations', {
             list: (c) => this.locationList(c),
             all: (c) => this.locationAll(c),
@@ -90,10 +94,13 @@ let MasterActions = class MasterActions {
             create: (c) => this.locationCreate(c),
             update: (c) => this.locationUpdate(c),
             delete: (c) => this.locationDelete(c),
+            parse_codes: (c) => this.locationParseCodes(c),
         });
         (0, registry_1.setPermission)('locations', 'create', 'write');
         (0, registry_1.setPermission)('locations', 'update', 'write');
         (0, registry_1.setPermission)('locations', 'delete', 'admin');
+        (0, registry_1.setModuleDepartments)('locations', ['all']);
+        (0, registry_1.setActionDepartments)('locations', 'all', ['inventory']);
         (0, registry_1.registerActions)('users', {
             list: (c) => this.userList(c),
             create: (c) => this.userCreate(c),
@@ -104,6 +111,7 @@ let MasterActions = class MasterActions {
         (0, registry_1.setPermission)('users', 'create', 'admin');
         (0, registry_1.setPermission)('users', 'update', 'admin');
         (0, registry_1.setPermission)('users', 'delete', 'admin');
+        (0, registry_1.setModuleDepartments)('users', ['all']);
     }
     async productList(ctx) {
         const search = String(ctx.query.search ?? '').trim();
@@ -529,13 +537,19 @@ let MasterActions = class MasterActions {
         return { id };
     }
     async userList(_ctx) {
-        const r = await this.db.query('SELECT id, username, full_name, email, role, is_active, created_at, updated_at FROM users ORDER BY full_name');
+        const r = await this.db.query('SELECT id, username, full_name, email, role, department, is_active, created_at, updated_at FROM users ORDER BY full_name');
         return {
             rows: r.rows.map((u) => ({ ...u, id: Number(u.id) })),
             roles: [
                 { key: 'admin', label: 'Admin' },
                 { key: 'operator', label: 'Operator' },
                 { key: 'viewer', label: 'Viewer' },
+            ],
+            departments: [
+                { key: 'inbound', label: 'Inbound' },
+                { key: 'outbound', label: 'Outbound' },
+                { key: 'inventory', label: 'Inventory' },
+                { key: 'all', label: 'Semua Departemen (Supervisor)' },
             ],
         };
     }
@@ -546,29 +560,39 @@ let MasterActions = class MasterActions {
         if (!String(d.username ?? '').trim() || !String(d.full_name ?? '').trim()) {
             throw api_exception_1.ApiException.badRequest('Username dan full name wajib diisi.');
         }
+        const department = d.department ?? 'all';
+        if (!(0, guards_1.isDepartment)(department)) {
+            throw api_exception_1.ApiException.badRequest('Department tidak valid. Pilih inbound, outbound, inventory, atau all.');
+        }
         const hash = await bcrypt.hash(d.password, 10);
-        const r = await this.db.query(`INSERT INTO users (username, password, full_name, email, role, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [
+        const r = await this.db.query(`INSERT INTO users (username, password, full_name, email, role, department, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [
             String(d.username).trim(),
             hash,
             String(d.full_name).trim(),
             String(d.email ?? '').trim(),
             d.role ?? 'viewer',
+            department,
             d.is_active !== undefined ? Number(d.is_active) : 1,
         ]);
         const newId = Number(r.rows[0].id);
-        await this.activity.log('CREATE_USER', 'user', 'User', newId, String(d.username).trim(), 'Buat user baru: ' + String(d.full_name).trim() + ' (' + (d.role ?? 'viewer') + ')', null, null, this.actCtx(ctx));
+        await this.activity.log('CREATE_USER', 'user', 'User', newId, String(d.username).trim(), 'Buat user baru: ' + String(d.full_name).trim() + ' (' + (d.role ?? 'viewer') + ' / ' + department + ')', null, null, this.actCtx(ctx));
         return { id: newId };
     }
     async userUpdate(ctx) {
         const d = ctx.body;
         const id = Number.parseInt(d.id ?? '0', 10) || 0;
-        let sql = 'UPDATE users SET username=$1, full_name=$2, email=$3, role=$4, is_active=$5';
+        const department = d.department ?? 'all';
+        if (!(0, guards_1.isDepartment)(department)) {
+            throw api_exception_1.ApiException.badRequest('Department tidak valid. Pilih inbound, outbound, inventory, atau all.');
+        }
+        let sql = 'UPDATE users SET username=$1, full_name=$2, email=$3, role=$4, department=$5, is_active=$6';
         const params = [
             String(d.username ?? '').trim(),
             String(d.full_name ?? '').trim(),
             String(d.email ?? '').trim(),
             d.role ?? 'viewer',
+            department,
             d.is_active !== undefined ? Number(d.is_active) : 1,
         ];
         if (d.password) {
@@ -578,7 +602,7 @@ let MasterActions = class MasterActions {
         params.push(id);
         sql += ` WHERE id=$${params.length}`;
         await this.db.query(sql, params);
-        await this.activity.log('UPDATE_USER', 'user', 'User', id, String(d.username ?? '').trim(), 'Edit user: ' + String(d.full_name ?? '').trim() + ' → role ' + (d.role ?? 'viewer') + (d.password ? ', password diubah' : ''), null, null, this.actCtx(ctx));
+        await this.activity.log('UPDATE_USER', 'user', 'User', id, String(d.username ?? '').trim(), 'Edit user: ' + String(d.full_name ?? '').trim() + ' → role ' + (d.role ?? 'viewer') + ' / ' + department + (d.password ? ', password diubah' : ''), null, null, this.actCtx(ctx));
         return { id };
     }
     async userDelete(ctx) {
@@ -607,6 +631,50 @@ let MasterActions = class MasterActions {
     }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };
+    }
+    async locationParseCodes(_ctx) {
+        try {
+            const result = await this.db.query(`
+        UPDATE location_master
+        SET 
+          aisle = SUBSTRING(location_code, 1, 2),
+          rack = SUBSTRING(location_code, 1, 4),
+          row_name = SUBSTRING(location_code, 5, 1),
+          position = SUBSTRING(location_code, 6, 2)
+        WHERE 
+          location_code ~ '^[A-Z]{2}\\d{2}[A-E]\\d{2}$'
+          AND (aisle IS NULL OR rack IS NULL OR row_name IS NULL OR position IS NULL)
+      `);
+            const updated = result.rowCount || 0;
+            const sample = await this.db.query(`
+        SELECT location_code, aisle, rack, row_name, position,
+               CASE row_name
+                 WHEN 'A' THEN 'Bottom'
+                 WHEN 'B' THEN 'Lower'
+                 WHEN 'C' THEN 'Middle'
+                 WHEN 'D' THEN 'Upper'
+                 WHEN 'E' THEN 'Top'
+                 ELSE row_name
+               END as level_name
+        FROM location_master
+        WHERE location_code ~ '^[A-Z]{2}\\d{2}[A-E]\\d{2}$'
+        ORDER BY aisle, rack, row_name, position
+        LIMIT 10
+      `);
+            return {
+                success: true,
+                updated,
+                message: `Successfully parsed and updated ${updated} location(s)`,
+                sample: sample.rows,
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                updated: 0,
+                message: `Error parsing locations: ${error.message}`,
+            };
+        }
     }
 };
 exports.MasterActions = MasterActions;

@@ -19,6 +19,7 @@ import BinTransferPage from '@/pages/BinTransferPage';
 import ProductsPage from '@/pages/ProductsPage';
 import CustomersPage from '@/pages/CustomersPage';
 import LocationsPage from '@/pages/LocationsPage';
+import ZoningPage from '@/pages/ZoningPage';
 import ReportsPage from '@/pages/ReportsPage';
 import ImportPage from '@/pages/ImportPage';
 import AutoImportPage from '@/pages/AutoImportPage';
@@ -74,6 +75,7 @@ export default function App() {
                   <Route path="/products" element={<ProductsPage />} />
                   <Route path="/customers" element={<CustomersPage />} />
                   <Route path="/locations" element={<LocationsPage />} />
+                  <Route path="/zoning" element={<ZoningPage />} />
                 </Route>
                 <Route element={<RequireAdmin />}>
                   <Route path="/users" element={<UsersPage />} />

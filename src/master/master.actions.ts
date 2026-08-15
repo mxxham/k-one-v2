@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { DbService } from '../database/db.service';
 import { ActivityLogger } from '../common/activity-logger';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments, setActionDepartments } from '../dispatcher/registry';
+import { isDepartment } from '../auth/guards';
 import { ApiException } from '../common/api-exception';
 import { MasterDataService } from './master-data.service';
 
@@ -26,6 +27,7 @@ export class MasterActions {
     setPermission('products', 'create', 'write');
     setPermission('products', 'update', 'write');
     setPermission('products', 'delete', 'admin');
+    setModuleDepartments('products', ['all']);
     registerActions('customers', {
       list: (c) => this.customerList(c),
       all: (c) => this.customerAll(c),
@@ -37,6 +39,8 @@ export class MasterActions {
     setPermission('customers', 'create', 'write');
     setPermission('customers', 'update', 'write');
     setPermission('customers', 'delete', 'write');
+    setModuleDepartments('customers', ['all']);
+    setActionDepartments('customers', 'all', ['outbound']);
     registerActions('locations', {
       list: (c) => this.locationList(c),
       all: (c) => this.locationAll(c),
@@ -47,10 +51,13 @@ export class MasterActions {
       create: (c) => this.locationCreate(c),
       update: (c) => this.locationUpdate(c),
       delete: (c) => this.locationDelete(c),
+      parse_codes: (c) => this.locationParseCodes(c),
     });
     setPermission('locations', 'create', 'write');
     setPermission('locations', 'update', 'write');
     setPermission('locations', 'delete', 'admin');
+    setModuleDepartments('locations', ['all']);
+    setActionDepartments('locations', 'all', ['inventory']);
     registerActions('users', {
       list: (c) => this.userList(c),
       create: (c) => this.userCreate(c),
@@ -61,6 +68,7 @@ export class MasterActions {
     setPermission('users', 'create', 'admin');
     setPermission('users', 'update', 'admin');
     setPermission('users', 'delete', 'admin');
+    setModuleDepartments('users', ['all']);
   }
 
   // ---------------------------------------------------------------------------
@@ -614,7 +622,7 @@ export class MasterActions {
   // ---------------------------------------------------------------------------
   private async userList(_ctx: RequestContext): Promise<Q> {
     const r = await this.db.query(
-      'SELECT id, username, full_name, email, role, is_active, created_at, updated_at FROM users ORDER BY full_name',
+      'SELECT id, username, full_name, email, role, department, is_active, created_at, updated_at FROM users ORDER BY full_name',
     );
     return {
       rows: r.rows.map((u) => ({ ...u, id: Number(u.id) })),
@@ -622,6 +630,12 @@ export class MasterActions {
         { key: 'admin', label: 'Admin' },
         { key: 'operator', label: 'Operator' },
         { key: 'viewer', label: 'Viewer' },
+      ],
+      departments: [
+        { key: 'inbound', label: 'Inbound' },
+        { key: 'outbound', label: 'Outbound' },
+        { key: 'inventory', label: 'Inventory' },
+        { key: 'all', label: 'Semua Departemen (Supervisor)' },
       ],
     };
   }
@@ -632,23 +646,28 @@ export class MasterActions {
     if (!String(d.username ?? '').trim() || !String(d.full_name ?? '').trim()) {
       throw ApiException.badRequest('Username dan full name wajib diisi.');
     }
+    const department = d.department ?? 'all';
+    if (!isDepartment(department)) {
+      throw ApiException.badRequest('Department tidak valid. Pilih inbound, outbound, inventory, atau all.');
+    }
     const hash = await bcrypt.hash(d.password, 10);
     const r = await this.db.query(
-      `INSERT INTO users (username, password, full_name, email, role, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      `INSERT INTO users (username, password, full_name, email, role, department, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
       [
         String(d.username).trim(),
         hash,
         String(d.full_name).trim(),
         String(d.email ?? '').trim(),
         d.role ?? 'viewer',
+        department,
         d.is_active !== undefined ? Number(d.is_active) : 1,
       ],
     );
     const newId = Number(r.rows[0].id);
     await this.activity.log(
       'CREATE_USER', 'user', 'User', newId, String(d.username).trim(),
-      'Buat user baru: ' + String(d.full_name).trim() + ' (' + (d.role ?? 'viewer') + ')',
+      'Buat user baru: ' + String(d.full_name).trim() + ' (' + (d.role ?? 'viewer') + ' / ' + department + ')',
       null, null, this.actCtx(ctx),
     );
     return { id: newId };
@@ -657,12 +676,17 @@ export class MasterActions {
   private async userUpdate(ctx: RequestContext): Promise<Q> {
     const d = ctx.body;
     const id = Number.parseInt(d.id ?? '0', 10) || 0;
-    let sql = 'UPDATE users SET username=$1, full_name=$2, email=$3, role=$4, is_active=$5';
+    const department = d.department ?? 'all';
+    if (!isDepartment(department)) {
+      throw ApiException.badRequest('Department tidak valid. Pilih inbound, outbound, inventory, atau all.');
+    }
+    let sql = 'UPDATE users SET username=$1, full_name=$2, email=$3, role=$4, department=$5, is_active=$6';
     const params: unknown[] = [
       String(d.username ?? '').trim(),
       String(d.full_name ?? '').trim(),
       String(d.email ?? '').trim(),
       d.role ?? 'viewer',
+      department,
       d.is_active !== undefined ? Number(d.is_active) : 1,
     ];
     if (d.password) {
@@ -674,7 +698,7 @@ export class MasterActions {
     await this.db.query(sql, params);
     await this.activity.log(
       'UPDATE_USER', 'user', 'User', id, String(d.username ?? '').trim(),
-      'Edit user: ' + String(d.full_name ?? '').trim() + ' → role ' + (d.role ?? 'viewer') + (d.password ? ', password diubah' : ''),
+      'Edit user: ' + String(d.full_name ?? '').trim() + ' → role ' + (d.role ?? 'viewer') + ' / ' + department + (d.password ? ', password diubah' : ''),
       null, null, this.actCtx(ctx),
     );
     return { id };
@@ -706,5 +730,57 @@ export class MasterActions {
 
   private actCtx(ctx: RequestContext) {
     return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };
+  }
+
+  /**
+   * Parse location codes and update structured fields (rack, level, position)
+   * Format: CD01A02 → rack=CD01, aisle=CD, row_name=A, position=02
+   */
+  private async locationParseCodes(_ctx: RequestContext): Promise<Q> {
+    try {
+      const result = await this.db.query(`
+        UPDATE location_master
+        SET 
+          aisle = SUBSTRING(location_code, 1, 2),
+          rack = SUBSTRING(location_code, 1, 4),
+          row_name = SUBSTRING(location_code, 5, 1),
+          position = SUBSTRING(location_code, 6, 2)
+        WHERE 
+          location_code ~ '^[A-Z]{2}\\d{2}[A-E]\\d{2}$'
+          AND (aisle IS NULL OR rack IS NULL OR row_name IS NULL OR position IS NULL)
+      `);
+
+      const updated = result.rowCount || 0;
+
+      // Get sample of updated locations
+      const sample = await this.db.query(`
+        SELECT location_code, aisle, rack, row_name, position,
+               CASE row_name
+                 WHEN 'A' THEN 'Bottom'
+                 WHEN 'B' THEN 'Lower'
+                 WHEN 'C' THEN 'Middle'
+                 WHEN 'D' THEN 'Upper'
+                 WHEN 'E' THEN 'Top'
+                 ELSE row_name
+               END as level_name
+        FROM location_master
+        WHERE location_code ~ '^[A-Z]{2}\\d{2}[A-E]\\d{2}$'
+        ORDER BY aisle, rack, row_name, position
+        LIMIT 10
+      `);
+
+      return {
+        success: true,
+        updated,
+        message: `Successfully parsed and updated ${updated} location(s)`,
+        sample: sample.rows,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        updated: 0,
+        message: `Error parsing locations: ${error.message}`,
+      };
+    }
   }
 }

@@ -239,6 +239,11 @@ CREATE TABLE IF NOT EXISTS stock (
     expiry_date      DATE,
     stock_status     VARCHAR(20) NOT NULL DEFAULT 'Available' CHECK (
       stock_status IN ('Available','Reserved','Expired','Dues In')),
+    hold_status      VARCHAR(20) NOT NULL DEFAULT 'available' CHECK (
+      hold_status IN ('available','on_hold','quarantine','damaged')),
+    hold_reason      TEXT,
+    hold_by          BIGINT REFERENCES users(id),
+    hold_at          TIMESTAMP,
     created_at       TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -299,7 +304,7 @@ CREATE TABLE IF NOT EXISTS stock_ledger (
     transaction_date DATE NOT NULL,
     product_id       BIGINT NOT NULL REFERENCES products(id),
     transaction_type VARCHAR(20) NOT NULL CHECK (
-      transaction_type IN ('IN','OUT','ADJUSTMENT','TRANSFER','TRANSFER_IN','TRANSFER_OUT')),
+      transaction_type IN ('IN','OUT','ADJUSTMENT','TRANSFER','TRANSFER_IN','TRANSFER_OUT','HOLD','RELEASE')),
     reference_type   VARCHAR(50),
     reference_id     BIGINT,
     reference_number VARCHAR(50),
@@ -318,11 +323,35 @@ CREATE INDEX IF NOT EXISTS idx_stock_ledger_date ON stock_ledger(transaction_dat
 CREATE INDEX IF NOT EXISTS idx_stock_ledger_ref ON stock_ledger(reference_type, reference_id);
 
 -- ---------------------------------------------------------------------------
+-- WAVES (Phase 4 — Wave Planning)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS waves (
+    id           BIGSERIAL PRIMARY KEY,
+    wave_number  VARCHAR(50) UNIQUE NOT NULL,
+    status       VARCHAR(20) NOT NULL DEFAULT 'Planning' CHECK (
+      status IN ('Planning','Active','Completed','Cancelled')),
+    carrier      VARCHAR(100),
+    cutoff_time  TIMESTAMP,
+    created_by   BIGINT NOT NULL REFERENCES users(id),
+    created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_waves_status ON waves(status);
+CREATE INDEX IF NOT EXISTS idx_waves_created_by ON waves(created_by);
+
+CREATE TABLE IF NOT EXISTS wave_orders (
+    wave_id           BIGINT NOT NULL REFERENCES waves(id) ON DELETE CASCADE,
+    outbound_order_id BIGINT NOT NULL REFERENCES outbound_orders(id) ON DELETE CASCADE,
+    PRIMARY KEY (wave_id, outbound_order_id)
+);
+CREATE INDEX IF NOT EXISTS idx_wave_orders_outbound ON wave_orders(outbound_order_id);
+
+-- ---------------------------------------------------------------------------
 -- PICKLIST
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS picklists (
     id                BIGSERIAL PRIMARY KEY,
-    outbound_order_id BIGINT NOT NULL REFERENCES outbound_orders(id) ON DELETE CASCADE,
+    outbound_order_id BIGINT REFERENCES outbound_orders(id) ON DELETE CASCADE,
+    wave_id           BIGINT REFERENCES waves(id),
     picklist_number   VARCHAR(50) UNIQUE NOT NULL,
     created_date      DATE NOT NULL,
     status            VARCHAR(20) NOT NULL DEFAULT 'Draft' CHECK (
@@ -334,6 +363,7 @@ CREATE TABLE IF NOT EXISTS picklists (
     completed_at      TIMESTAMP,
     created_at        TIMESTAMP NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_picklists_wave ON picklists(wave_id);
 
 CREATE TABLE IF NOT EXISTS picklist_items (
     id                BIGSERIAL PRIMARY KEY,
@@ -465,6 +495,22 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     expires_at TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id);
+
+-- ---------------------------------------------------------------------------
+-- REPLENISHMENT (Phase 3 — pick-face thresholds)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pick_face_targets (
+    id          BIGSERIAL PRIMARY KEY,
+    location_id BIGINT NOT NULL REFERENCES location_master(id),
+    product_id  BIGINT NOT NULL REFERENCES products(id),
+    min_qty     NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (min_qty >= 0),
+    max_qty     NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (max_qty >= 0),
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (location_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pft_location ON pick_face_targets(location_id);
+CREATE INDEX IF NOT EXISTS idx_pft_product  ON pick_face_targets(product_id);
 
 -- ---------------------------------------------------------------------------
 -- SEED

@@ -60,6 +60,7 @@ let StockTakeActions = class StockTakeActions {
         (0, registry_1.setPermission)('stocktake', 'finish_counting', 'write');
         (0, registry_1.setPermission)('stocktake', 'save_review', 'write');
         (0, registry_1.setPermission)('stocktake', 'apply_adjustment', 'admin');
+        (0, registry_1.setModuleDepartments)('stocktake', ['inventory']);
     }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };

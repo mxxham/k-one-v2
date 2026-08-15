@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ImportService } from './import.service';
 import { ImportQueueProvider } from './import-queue.provider';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments } from '../dispatcher/registry';
 import { tplInbound, tplOutbound, tplStock } from './import-templates';
 import { ApiException } from '../common/api-exception';
 import { TASK_KEYS } from '@k-one/shared';
@@ -44,6 +44,7 @@ export class ImportActions {
     setPermission('import', 'stock_commit', 'write');
     setPermission('import', 'auto', 'write');
     setPermission('import', 'auto_async', 'write');
+    setModuleDepartments('import', ['all']);
   }
 
   private async tplInbound(): Promise<BinaryResult> {

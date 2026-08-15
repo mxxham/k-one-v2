@@ -9,11 +9,16 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AdminGuard = exports.WriteGuard = exports.AuthGuard = void 0;
+exports.AdminGuard = exports.WriteGuard = exports.AuthGuard = exports.DEPARTMENTS = void 0;
+exports.isDepartment = isDepartment;
 exports.resolveUser = resolveUser;
 const common_1 = require("@nestjs/common");
 const db_service_1 = require("../database/db.service");
 const api_exception_1 = require("../common/api-exception");
+exports.DEPARTMENTS = ['inbound', 'outbound', 'inventory', 'all'];
+function isDepartment(v) {
+    return typeof v === 'string' && exports.DEPARTMENTS.includes(v);
+}
 const WRITE_ROLES = ['admin', 'operator', 'warehouse', 'supervisor', 'staff'];
 async function resolveUser(db, req) {
     let token = null;
@@ -23,7 +28,7 @@ async function resolveUser(db, req) {
     }
     if (!token)
         return null;
-    const r = await db.query(`SELECT u.id, u.username, u.full_name, u.email, u.role
+    const r = await db.query(`SELECT u.id, u.username, u.full_name, u.email, u.role, u.department
      FROM auth_tokens t JOIN users u ON u.id = t.user_id
      WHERE t.token = $1 AND t.expires_at > NOW() LIMIT 1`, [token]);
     if (r.rows.length === 0)
@@ -35,6 +40,7 @@ async function resolveUser(db, req) {
         full_name: row.full_name,
         email: row.email,
         role: row.role,
+        department: row.department ?? 'all',
     };
 }
 let AuthGuard = class AuthGuard {

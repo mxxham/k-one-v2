@@ -8,6 +8,14 @@ export interface CurrentUser {
   full_name: string;
   email: string;
   role: string;
+  department: string;
+}
+
+export const DEPARTMENTS = ['inbound', 'outbound', 'inventory', 'all'] as const;
+export type Department = (typeof DEPARTMENTS)[number];
+
+export function isDepartment(v: unknown): v is Department {
+  return typeof v === 'string' && (DEPARTMENTS as readonly string[]).includes(v);
 }
 
 const WRITE_ROLES = ['admin', 'operator', 'warehouse', 'supervisor', 'staff'];
@@ -25,8 +33,9 @@ export async function resolveUser(db: DbService, req: any): Promise<CurrentUser 
     full_name: string;
     email: string;
     role: string;
+    department: string;
   }>(
-    `SELECT u.id, u.username, u.full_name, u.email, u.role
+    `SELECT u.id, u.username, u.full_name, u.email, u.role, u.department
      FROM auth_tokens t JOIN users u ON u.id = t.user_id
      WHERE t.token = $1 AND t.expires_at > NOW() LIMIT 1`,
     [token],
@@ -39,6 +48,7 @@ export async function resolveUser(db: DbService, req: any): Promise<CurrentUser 
     full_name: row.full_name,
     email: row.email,
     role: row.role,
+    department: row.department ?? 'all',
   };
 }
 

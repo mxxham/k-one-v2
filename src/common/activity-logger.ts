@@ -147,6 +147,9 @@ export class ActivityLogger {
       'auth',
       'system',
       'import',
+      'asn',
+      'abc',
+      'cyclecount',
     ];
   }
 }

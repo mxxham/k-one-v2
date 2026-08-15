@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Req, Body, Query, HttpCode, NotFoundException, Logger, Res, StreamableFile } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { getActionHandler, knownModule, getPermission } from './registry';
+import { getActionHandler, knownModule, getPermission, getDepartments } from './registry';
 import { resolveUser } from '../auth/guards';
 import { DbService } from '../database/db.service';
 import { ApiException } from '../common/api-exception';
@@ -88,6 +88,12 @@ export class GatewayController {
       }
       if (level === 'admin' && user.role !== 'admin') {
         throw ApiException.forbidden('Akses ditolak. Khusus admin.');
+      }
+      // Department access control (new-roles.md Phase 0). department === 'all'
+      // (admin/supervisor) always passes regardless of the action's list.
+      const depts = getDepartments(module, action);
+      if (depts && user.department !== 'all' && !depts.includes(user.department)) {
+        throw ApiException.forbidden('Akses ditolak. Department Anda tidak memiliki izin untuk modul ini.');
       }
     }
 

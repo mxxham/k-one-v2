@@ -36,6 +36,16 @@ let ReportService = class ReportService {
             totalDrums += Number(u.total_qty ?? 0);
             totalPallets += Number(u.total_pallet ?? 0);
         }
+        const prevWeekStock = await db.query(`SELECT COALESCE(SUM(balance), 0) as prev_total
+       FROM stock_ledger
+       WHERE transaction_date = CURRENT_DATE - INTERVAL '7 days'
+       AND id IN (
+         SELECT MAX(id) FROM stock_ledger
+         WHERE transaction_date <= CURRENT_DATE - INTERVAL '7 days'
+         GROUP BY product_id, batch_number
+       )`);
+        const prevTotal = Number(prevWeekStock.rows[0]?.prev_total ?? totalDrums);
+        const stockTrend = prevTotal > 0 ? ((totalDrums - prevTotal) / prevTotal) * 100 : 0;
         const expiringSoon = await db.query(`SELECT COUNT(*)::int as count FROM stock
        WHERE expiry_date <= CURRENT_DATE + INTERVAL '120 days'
        AND expiry_date > CURRENT_DATE AND stock_status = 'Available'`);
@@ -138,7 +148,9 @@ let ReportService = class ReportService {
         return {
             kpi: {
                 total_drums: Number(totalDrums),
+                total_drums_trend: Number(stockTrend.toFixed(2)),
                 total_pallets: Number(totalPallets),
+                total_pallets_utilization: 0,
                 expiring_soon: Number(expiringSoon.rows[0].count),
                 expired_items: expiredCount,
                 dues_in: Number(duesInCount.rows[0].count),
@@ -157,6 +169,8 @@ let ReportService = class ReportService {
                 aging_batch_count: Number(agingInventory.rows[0].aging_batch_count ?? 0),
                 aging_quantity: Number(agingInventory.rows[0].aging_quantity ?? 0),
                 aging_pallets: Number(agingInventory.rows[0].aging_pallets ?? 0),
+                total_locations: stockByLocation.rows.reduce((sum, r) => sum + Number(r.total_locs ?? 0), 0),
+                occupied_locations: stockByLocation.rows.reduce((sum, r) => sum + Number(r.occupied_locs ?? 0), 0),
             },
             expired_detail: expiredDetail,
             stock_summary: stockSummary.rows,
@@ -175,39 +189,6 @@ let ReportService = class ReportService {
           COALESCE(s1.uom, s2.uom) AS uom,
           COALESCE(s1.batch_number, s2.batch_number) AS batch,
           COALESCE(s1.expiry_date, s2.expiry_date) AS expiry,
-
-  async checkExpiryAlerts(): Promise<Q> {
-    // Find stock expiring in next 30 days
-    const expiring = await this.db.query(
-      `, SELECT, p.product_code, p.product_name, s.batch_number, s.expiry_date, s.location, s.quantity, s.pallet, s.uom, (s.expiry_date - CURRENT_DATE), FROM, stock, s, JOIN, products, p, ON, s.product_id = p.id, WHERE, s.stock_status = 'Available', AND, s.quantity > 0, AND, s.expiry_date, IS, NOT, NULL, AND, s.expiry_date > CURRENT_DATE, AND, s.expiry_date <= CURRENT_DATE + INTERVAL, '30 days', ORDER, BY, s.expiry_date, ASC, p.product_name `,
-    );
-
-    const count = expiring.rows.length;
-    const totalQty = expiring.rows.reduce((sum: number, r: any) => sum + Number(r.quantity || 0), 0);
-    const totalPallets = expiring.rows.reduce((sum: number, r: any) => sum + Number(r.pallet || 0), 0);
-
-    return {
-      alert_count: count,
-      total_quantity: Number(totalQty.toFixed(2)),
-      total_pallets: Math.ceil(totalPallets),
-      items: expiring.rows.map((r: any) => ({
-        product_code: r.product_code,
-        product_name: r.product_name,
-        batch_number: r.batch_number,
-        expiry_date: r.expiry_date,
-        location: r.location,
-        quantity: Number(r.quantity),
-        pallet: Number(r.pallet),
-        uom: r.uom,
-        days_until_expiry: Number(r.days_until_expiry),
-      })),
-      message:
-        count === 0
-          ? 'Tidak ada stock yang akan expired dalam 30 hari'
-          : `, Ditemukan, $, { count }, batch, stock, yang, akan, expired, dalam, 30, hari($, { totalQty, : .toFixed(0) }, units, $, { Math, : .ceil(totalPallets) }, pallets) `,
-    };
-  }
-
           COALESCE(p1.product_name, p2.product_name) AS product,
           COALESCE(p1.product_code, p2.product_code) AS product_code,
           COALESCE(p1.uom_per_pallet, p2.uom_per_pallet) AS uom_per_pallet
@@ -251,6 +232,260 @@ let ReportService = class ReportService {
                 total_qty: phpNumberFormat(totalQty, 0),
                 total_pallet: totalPlt,
             },
+        };
+    }
+    async checkExpiryAlerts() {
+        const expiring = await this.db.query(`SELECT 
+        p.product_code, p.product_name, s.batch_number, s.expiry_date, s.location,
+        s.quantity, s.pallet, s.uom,
+        (s.expiry_date - CURRENT_DATE) as days_until_expiry
+       FROM stock s
+       JOIN products p ON s.product_id = p.id
+       WHERE s.stock_status = 'Available'
+       AND s.quantity > 0
+       AND s.expiry_date IS NOT NULL
+       AND s.expiry_date > CURRENT_DATE
+       AND s.expiry_date <= CURRENT_DATE + INTERVAL '30 days'
+       ORDER BY s.expiry_date ASC, p.product_name`);
+        const count = expiring.rows.length;
+        const totalQty = expiring.rows.reduce((sum, r) => sum + Number(r.quantity || 0), 0);
+        const totalPallets = expiring.rows.reduce((sum, r) => sum + Number(r.pallet || 0), 0);
+        return {
+            alert_count: count,
+            total_quantity: Number(totalQty.toFixed(2)),
+            total_pallets: Math.ceil(totalPallets),
+            items: expiring.rows.map((r) => ({
+                product_code: r.product_code,
+                product_name: r.product_name,
+                batch_number: r.batch_number,
+                expiry_date: r.expiry_date,
+                location: r.location,
+                quantity: Number(r.quantity),
+                pallet: Number(r.pallet),
+                uom: r.uom,
+                days_until_expiry: Number(r.days_until_expiry),
+            })),
+            message: count === 0
+                ? 'Tidak ada stock yang akan expired dalam 30 hari'
+                : `Ditemukan ${count} batch stock yang akan expired dalam 30 hari (${totalQty.toFixed(0)} units, ${Math.ceil(totalPallets)} pallets)`,
+        };
+    }
+    async fefoQueue(limit = 50) {
+        const queue = await this.db.query(`SELECT 
+        s.id, s.product_id, p.product_code, p.product_name, 
+        s.batch_number, s.expiry_date, s.location,
+        s.quantity, s.pallet, s.uom,
+        CASE 
+          WHEN s.expiry_date < CURRENT_DATE THEN 'expired'
+          WHEN s.expiry_date <= CURRENT_DATE + INTERVAL '30 days' THEN 'critical'
+          WHEN s.expiry_date <= CURRENT_DATE + INTERVAL '90 days' THEN 'warning'
+          ELSE 'safe'
+        END as priority_level,
+        (s.expiry_date - CURRENT_DATE)::int as days_remaining
+       FROM stock s
+       JOIN products p ON s.product_id = p.id
+       WHERE s.stock_status = 'Available'
+       AND s.quantity > 0
+       AND s.expiry_date IS NOT NULL
+       ORDER BY s.expiry_date ASC, p.product_name ASC
+       LIMIT $1`, [limit]);
+        const summary = await this.db.query(`SELECT 
+        EXTRACT(YEAR FROM s.expiry_date)::int as year,
+        COUNT(*)::int as count,
+        COALESCE(SUM(s.quantity),0) as quantity
+       FROM stock s
+       WHERE s.stock_status = 'Available'
+       AND s.quantity > 0
+       AND s.expiry_date IS NOT NULL
+       GROUP BY year
+       ORDER BY year ASC`);
+        const yearRows = summary.rows.map((r) => ({
+            year: Number(r.year),
+            count: Number(r.count),
+            quantity: Number(r.quantity),
+        }));
+        return {
+            summary: {
+                total: yearRows.reduce((a, r) => a + r.count, 0),
+                years: yearRows,
+            },
+            queue: queue.rows.map((r) => ({
+                id: Number(r.id),
+                product_id: Number(r.product_id),
+                product_code: r.product_code,
+                product_name: r.product_name,
+                batch_number: r.batch_number,
+                expiry_date: r.expiry_date,
+                location: r.location,
+                quantity: Number(r.quantity),
+                pallet: Number(r.pallet),
+                uom: r.uom,
+                priority_level: r.priority_level,
+                days_remaining: Number(r.days_remaining ?? 0),
+            })),
+        };
+    }
+    async dashboardAlerts() {
+        const db = this.db;
+        const expired = await db.query(`SELECT COUNT(*)::int as count, SUM(quantity) as qty
+       FROM stock 
+       WHERE stock_status = 'Available' 
+       AND quantity > 0
+       AND expiry_date < CURRENT_DATE`);
+        const critical = await db.query(`SELECT COUNT(*)::int as count, SUM(quantity) as qty
+       FROM stock 
+       WHERE stock_status = 'Available' 
+       AND quantity > 0
+       AND expiry_date >= CURRENT_DATE
+       AND expiry_date <= CURRENT_DATE + INTERVAL '30 days'`);
+        const stocktakeLocks = await db.query(`SELECT COUNT(DISTINCT location)::int as locked_locations
+       FROM stock_take_items sti
+       JOIN stock_take st ON st.id = sti.stock_take_id
+       WHERE st.status IN ('Counting', 'Review')
+       AND sti.location IS NOT NULL`);
+        const stalePicks = await db.query(`SELECT COUNT(*)::int as count
+       FROM outbound_orders
+       WHERE status = 'Picking'
+       AND updated_at < CURRENT_DATE - INTERVAL '1 day'`);
+        const overdueInbound = await db.query(`SELECT COUNT(*)::int as count
+       FROM inbound_orders
+       WHERE status = 'Dues In'
+       AND order_date < CURRENT_DATE - INTERVAL '7 days'`);
+        const alerts = [];
+        if (Number(expired.rows[0].count) > 0) {
+            alerts.push({
+                level: 'critical',
+                type: 'expired',
+                message: `${expired.rows[0].count} batch expired (${Number(expired.rows[0].qty ?? 0).toFixed(0)} units)`,
+                count: Number(expired.rows[0].count),
+                action_link: '/stock?filter=expired',
+            });
+        }
+        if (Number(critical.rows[0].count) > 0) {
+            alerts.push({
+                level: 'warning',
+                type: 'critical_expiry',
+                message: `${critical.rows[0].count} batch expiring dalam 30 hari (${Number(critical.rows[0].qty ?? 0).toFixed(0)} units)`,
+                count: Number(critical.rows[0].count),
+                action_link: '/stock?filter=expiring',
+            });
+        }
+        if (Number(stocktakeLocks.rows[0].locked_locations) > 0) {
+            alerts.push({
+                level: 'info',
+                type: 'stocktake_lock',
+                message: `${stocktakeLocks.rows[0].locked_locations} lokasi terkunci (stock take aktif)`,
+                count: Number(stocktakeLocks.rows[0].locked_locations),
+                action_link: '/stocktake',
+            });
+        }
+        if (Number(stalePicks.rows[0].count) > 0) {
+            alerts.push({
+                level: 'warning',
+                type: 'stale_picks',
+                message: `${stalePicks.rows[0].count} outbound stuck di status Picking`,
+                count: Number(stalePicks.rows[0].count),
+                action_link: '/outbound?status=Picking',
+            });
+        }
+        if (Number(overdueInbound.rows[0].count) > 0) {
+            alerts.push({
+                level: 'info',
+                type: 'overdue_inbound',
+                message: `${overdueInbound.rows[0].count} inbound overdue (> 7 hari)`,
+                count: Number(overdueInbound.rows[0].count),
+                action_link: '/inbound?status=Dues In',
+            });
+        }
+        return { alerts };
+    }
+    async dashboardInsights() {
+        const db = this.db;
+        const fastMovers = await db.query(`SELECT 
+        p.id, p.product_code, p.product_name,
+        COUNT(DISTINCT sl.id)::int as transaction_count,
+        SUM(sl.quantity_out) as total_shipped,
+        SUM(sl.quantity_out) / 30.0 as avg_daily_qty
+       FROM stock_ledger sl
+       JOIN products p ON sl.product_id = p.id
+       WHERE sl.transaction_type = 'OUT'
+       AND sl.transaction_date >= CURRENT_DATE - INTERVAL '30 days'
+       GROUP BY p.id
+       ORDER BY total_shipped DESC
+       LIMIT 5`);
+        const slowMovers = await db.query(`SELECT 
+        p.id, p.product_code, p.product_name,
+        COUNT(DISTINCT s.id)::int as batch_count,
+        SUM(s.quantity) as total_qty,
+        MIN(sl.transaction_date) as oldest_receipt
+       FROM stock s
+       JOIN products p ON s.product_id = p.id
+       LEFT JOIN stock_ledger sl ON sl.product_id = s.product_id 
+         AND sl.batch_number IS NOT DISTINCT FROM s.batch_number
+         AND sl.transaction_type = 'IN'
+       WHERE s.stock_status = 'Available'
+       AND s.quantity > 0
+       AND (sl.transaction_date IS NULL OR sl.transaction_date <= CURRENT_DATE - INTERVAL '90 days')
+       GROUP BY p.id
+       ORDER BY total_qty DESC
+       LIMIT 5`);
+        const lowStock = await db.query(`SELECT 
+        p.id, p.product_code, p.product_name, p.uom_type,
+        SUM(s.quantity) as current_qty,
+        100 as reorder_point
+       FROM stock s
+       JOIN products p ON s.product_id = p.id
+       WHERE s.stock_status = 'Available'
+       AND s.quantity > 0
+       GROUP BY p.id
+       HAVING SUM(s.quantity) < 100
+       ORDER BY current_qty ASC
+       LIMIT 5`);
+        const locationUtil = await db.query(`SELECT 
+        lm.aisle,
+        COUNT(DISTINCT lm.location_code)::int as total_locations,
+        COUNT(DISTINCT CASE WHEN s1.quantity > 0 OR s2.quantity > 0 THEN lm.location_code END)::int as occupied,
+        ROUND(100.0 * COUNT(DISTINCT CASE WHEN s1.quantity > 0 OR s2.quantity > 0 THEN lm.location_code END) / NULLIF(COUNT(DISTINCT lm.location_code), 0), 1) as utilization_percent
+       FROM location_master lm
+       LEFT JOIN stock_locations sl ON sl.location_code = lm.location_code
+         AND sl.status IN ('Available','Reserved')
+       LEFT JOIN stock s1 ON sl.stock_id = s1.id AND s1.quantity > 0
+       LEFT JOIN stock s2 ON s2.location = lm.location_code
+         AND s2.quantity > 0 AND s2.stock_status = 'Available' AND s1.id IS NULL
+       WHERE lm.is_active = 1
+       GROUP BY lm.aisle
+       ORDER BY utilization_percent DESC`);
+        return {
+            fast_movers: fastMovers.rows.map((r) => ({
+                id: Number(r.id),
+                product_code: r.product_code,
+                product_name: r.product_name,
+                transaction_count: Number(r.transaction_count),
+                total_shipped: Number(r.total_shipped ?? 0),
+                avg_daily_qty: Number(Number(r.avg_daily_qty ?? 0).toFixed(2)),
+            })),
+            slow_movers: slowMovers.rows.map((r) => ({
+                id: Number(r.id),
+                product_code: r.product_code,
+                product_name: r.product_name,
+                batch_count: Number(r.batch_count),
+                total_qty: Number(r.total_qty ?? 0),
+                oldest_receipt: r.oldest_receipt,
+            })),
+            low_stock: lowStock.rows.map((r) => ({
+                id: Number(r.id),
+                product_code: r.product_code,
+                product_name: r.product_name,
+                uom_type: r.uom_type,
+                current_qty: Number(r.current_qty ?? 0),
+                reorder_point: Number(r.reorder_point ?? 100),
+            })),
+            location_utilization: locationUtil.rows.map((r) => ({
+                aisle: r.aisle,
+                total_locations: Number(r.total_locations),
+                occupied: Number(r.occupied),
+                utilization_percent: Number(r.utilization_percent ?? 0),
+            })),
         };
     }
     async dailyReport(date, dateTo) {
@@ -445,6 +680,15 @@ let ReportService = class ReportService {
             BIN_TRANSFER: 'Transfer Bin-to-Bin',
             COMPLETE_BIN_TRANSFER: 'Selesai Bin Transfer',
             CANCEL_BIN_TRANSFER: 'Batal Bin Transfer',
+            SCAN_OVERRIDE: 'Override Scan (Mismatch)',
+            CREATE_ASN: 'Buat ASN',
+            UPDATE_ASN: 'Edit ASN',
+            CANCEL_ASN: 'Batal ASN',
+            RECOMPUTE_ABC: 'Recompute Analisis ABC',
+            CREATE_CYCLECOUNT: 'Buat Jadwal Cycle Count',
+            UPDATE_CYCLECOUNT: 'Edit Jadwal Cycle Count',
+            DELETE_CYCLECOUNT: 'Hapus Jadwal Cycle Count',
+            RUN_CYCLECOUNT: 'Run Cycle Count',
         };
         if (labels[action])
             return labels[action];
@@ -461,6 +705,8 @@ let ReportService = class ReportService {
             bin_transfer: 'fas fa-exchange-alt',
             stock: 'fas fa-boxes',
             user: 'fas fa-user',
+            abc: 'fas fa-chart-pie',
+            cyclecount: 'fas fa-calendar-check',
         };
         return icons[module] ?? 'fas fa-circle';
     }

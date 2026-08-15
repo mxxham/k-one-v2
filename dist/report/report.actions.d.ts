@@ -8,6 +8,9 @@ export declare class ReportActions {
     private dashboardStats;
     private aisleDetail;
     private checkExpiryAlerts;
+    private fefoQueue;
+    private dashboardAlerts;
+    private dashboardInsights;
     private daily;
     private products;
     private inbound;

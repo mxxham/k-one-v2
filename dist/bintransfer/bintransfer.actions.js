@@ -33,6 +33,7 @@ let BinTransferActions = class BinTransferActions {
         (0, registry_1.setPermission)('bintransfer', 'create', 'write');
         (0, registry_1.setPermission)('bintransfer', 'execute', 'write');
         (0, registry_1.setPermission)('bintransfer', 'cancel', 'write');
+        (0, registry_1.setModuleDepartments)('bintransfer', ['inventory']);
     }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };

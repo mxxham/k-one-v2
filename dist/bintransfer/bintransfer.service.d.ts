@@ -3,7 +3,7 @@ type Q = Record<string, any>;
 export declare class BinTransferService {
     private readonly db;
     constructor(db: DbService);
-    private generateNumber;
+    generateNumber(): Promise<string>;
     getAll(status: string | null, limit?: number, offset?: number): Promise<any[]>;
     countAll(status: string | null): Promise<number>;
     getById(id: number): Promise<any>;
@@ -11,6 +11,7 @@ export declare class BinTransferService {
     getLocationsWithStock(productId: number): Promise<any[]>;
     create(data: Q, userId: number): Promise<number>;
     execute(transferId: number, userId: number): Promise<void>;
+    private convertDestPalletFunction;
     cancel(transferId: number): Promise<void>;
     private addLedger;
 }

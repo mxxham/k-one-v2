@@ -54,6 +54,7 @@ const inbound_service_1 = require("../inbound/inbound.service");
 const outbound_service_1 = require("../outbound/outbound.service");
 const report_service_1 = require("../report/report.service");
 const stocktake_service_1 = require("../stocktake/stocktake.service");
+const asn_service_1 = require("../asn/asn.service");
 const api_exception_1 = require("../common/api-exception");
 const date_util_1 = require("../common/date-util");
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -168,12 +169,14 @@ let ExcelExportService = class ExcelExportService {
     outbound;
     report;
     stocktake;
-    constructor(db, inbound, outbound, report, stocktake) {
+    asn;
+    constructor(db, inbound, outbound, report, stocktake, asn) {
         this.db = db;
         this.inbound = inbound;
         this.outbound = outbound;
         this.report = report;
         this.stocktake = stocktake;
+        this.asn = asn;
     }
     async inboundReport(status) {
         const orders = await this.inbound.getAll(status, 2000, 0, null);
@@ -891,6 +894,73 @@ let ExcelExportService = class ExcelExportService {
         const fileName = `StockTake_${String(stockTake.take_number ?? '')}_${String(stockTake.take_date ?? '').slice(0, 10).replace(/-/g, '')}`;
         return { buffer: await toBuffer(wb), filename: `${fileName}_${nowStamp()}.xlsx`, contentType: XLSX_TYPE };
     }
+    async asnReport(status) {
+        const asns = await this.asn.getAll(status, 2000, 0);
+        if (asns.length === 0)
+            throw api_exception_1.ApiException.badRequest('Tidak ada data ASN untuk di-export.');
+        const asnIds = asns.map((a) => Number(a.id));
+        const r = await this.db.query(`SELECT ai.*, p.product_code, p.product_name, a.asn_number, a.supplier_name,
+              a.expected_arrival_date, a.status AS asn_status
+       FROM asn_items ai
+       JOIN products p ON ai.product_id = p.id
+       JOIN asn a ON ai.asn_id = a.id
+       WHERE ai.asn_id = ANY($1)
+       ORDER BY a.id, ai.id`, [asnIds]);
+        const items = r.rows;
+        const wb = new ExcelJS.Workbook();
+        const sheet = wb.addWorksheet('ASN Report');
+        const headerColor = '013D3C';
+        const subColor = '026766';
+        const headers = [
+            'No', 'ASN No', 'Supplier Name', 'Supplier Ref', 'Expected Arrival',
+            'Product Code', 'Product Name', 'Expected Qty', 'UOM', 'Batch / Lot', 'Exp. Date', 'ASN Status',
+        ];
+        const totalCols = headers.length;
+        const lastCol = colLetter(totalCols);
+        sheet.mergeCells(`A1:${lastCol}1`);
+        sheet.getCell('A1').value = `K-one — ASN Report   |   Dicetak: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })} ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} WIB   |   ${asns.length} ASN, ${items.length} item`;
+        sheet.getCell('A1').font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+        sheet.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${headerColor}` } };
+        sheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+        sheet.getRow(1).height = 24;
+        headers.forEach((h, c) => {
+            const cell = sheet.getCell(2, c + 1);
+            cell.value = h;
+            cell.font = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${subColor}` } };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.border = thinBorder();
+        });
+        sheet.getRow(2).height = 20;
+        sheet.views = [{ state: 'frozen', ySplit: 2 }];
+        let row = 3;
+        items.forEach((item, i) => {
+            const rowData = [
+                i + 1,
+                item.asn_number,
+                item.supplier_name ?? '',
+                item.supplier_reference ?? '',
+                fmtDate(item.expected_arrival_date),
+                item.product_code,
+                item.product_name,
+                nf(item.expected_qty),
+                item.uom ?? '',
+                item.batch_number ?? '',
+                fmtDate(item.exp_date),
+                item.asn_status ?? '',
+            ];
+            rowData.forEach((v, c) => {
+                const cell = sheet.getCell(row, c + 1);
+                cell.value = v;
+                cell.border = thinBorder();
+            });
+            row++;
+        });
+        const widths = [5, 16, 24, 16, 16, 14, 24, 12, 8, 14, 12, 12];
+        widths.forEach((w, c) => (sheet.getColumn(c + 1).width = w));
+        const fileName = `ASN_Report`;
+        return { buffer: await toBuffer(wb), filename: `${fileName}_${nowStamp()}.xlsx`, contentType: XLSX_TYPE };
+    }
 };
 exports.ExcelExportService = ExcelExportService;
 exports.ExcelExportService = ExcelExportService = __decorate([
@@ -899,6 +969,7 @@ exports.ExcelExportService = ExcelExportService = __decorate([
         inbound_service_1.InboundService,
         outbound_service_1.OutboundService,
         report_service_1.ReportService,
-        stocktake_service_1.StockTakeService])
+        stocktake_service_1.StockTakeService,
+        asn_service_1.AsnService])
 ], ExcelExportService);
 //# sourceMappingURL=excel-export.service.js.map

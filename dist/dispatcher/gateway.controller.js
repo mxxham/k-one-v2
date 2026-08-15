@@ -70,6 +70,10 @@ let GatewayController = class GatewayController {
             if (level === 'admin' && user.role !== 'admin') {
                 throw api_exception_1.ApiException.forbidden('Akses ditolak. Khusus admin.');
             }
+            const depts = (0, registry_1.getDepartments)(module, action);
+            if (depts && user.department !== 'all' && !depts.includes(user.department)) {
+                throw api_exception_1.ApiException.forbidden('Akses ditolak. Department Anda tidak memiliki izin untuk modul ini.');
+            }
         }
         const result = (await handler({
             user: user,

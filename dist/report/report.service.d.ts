@@ -9,6 +9,10 @@ export declare class ReportService {
     constructor(db: DbService, inbound: InboundService, outbound: OutboundService);
     dashboardStats(): Promise<Q>;
     aisleDetail(aisle: string): Promise<Q>;
+    checkExpiryAlerts(): Promise<Q>;
+    fefoQueue(limit?: number): Promise<Q>;
+    dashboardAlerts(): Promise<Q>;
+    dashboardInsights(): Promise<Q>;
     dailyReport(date: string | null, dateTo: string | null): Promise<Q>;
     private reportStockSummary;
     private reportInboundActivity;

@@ -11,3 +11,6 @@ export declare function getActionHandler(module: string, action: string): Action
 export declare function knownModule(module: string): boolean;
 export declare function setPermission(module: string, action: string, level: 'write' | 'admin' | 'any'): void;
 export declare function getPermission(module: string, action: string): 'write' | 'admin' | 'any';
+export declare function setModuleDepartments(module: string, departments: string[]): void;
+export declare function setActionDepartments(module: string, action: string, departments: string[]): void;
+export declare function getDepartments(module: string, action: string): string[] | undefined;

@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var StockActions_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StockActions = void 0;
 const common_1 = require("@nestjs/common");
@@ -18,6 +19,7 @@ const api_exception_1 = require("../common/api-exception");
 const master_data_service_1 = require("../master/master-data.service");
 const date_util_1 = require("../common/date-util");
 let StockActions = class StockActions {
+    static { StockActions_1 = this; }
     db;
     activity;
     master;
@@ -34,21 +36,35 @@ let StockActions = class StockActions {
             locations: (c) => this.locations(c),
             transfer: (c) => this.transfer(c),
             adjust: (c) => this.adjust(c),
+            hold: (c) => this.hold(c),
+            release: (c) => this.release(c),
+            scan: (c) => this.scan(c),
+            scan_override: (c) => this.scanOverride(c),
         });
         (0, registry_1.setPermission)('stock', 'transfer', 'write');
         (0, registry_1.setPermission)('stock', 'adjust', 'admin');
+        (0, registry_1.setPermission)('stock', 'hold', 'write');
+        (0, registry_1.setPermission)('stock', 'release', 'write');
+        (0, registry_1.setPermission)('stock', 'scan', 'any');
+        (0, registry_1.setPermission)('stock', 'scan_override', 'write');
+        (0, registry_1.setModuleDepartments)('stock', ['inventory']);
+        (0, registry_1.setActionDepartments)('stock', 'scan', ['inbound', 'outbound', 'inventory']);
+        (0, registry_1.setActionDepartments)('stock', 'scan_override', ['inbound', 'outbound', 'inventory']);
         (0, registry_1.registerActions)('ledger', {
             list: (c) => this.ledgerList(c),
             repair_all: (c) => this.ledgerRepairAll(c),
         });
         (0, registry_1.setPermission)('ledger', 'repair_all', 'admin');
+        (0, registry_1.setModuleDepartments)('ledger', ['inventory']);
     }
     async list(ctx) {
         const status = ctx.query.status ? String(ctx.query.status) : null;
         const expiring = ctx.query.expiring === '1' || ctx.query.expiring === 'true';
         const search = String(ctx.query.q ?? '').trim().toLowerCase();
         const location = String(ctx.query.location ?? '').trim();
-        let sql = `SELECT s.*, p.product_code, p.product_name, p.category, p.uom_type, p.uom_per_pallet
+        const yearRaw = String(ctx.query.year ?? '').trim();
+        const year = /^\d{4}$/.test(yearRaw) ? Number(yearRaw) : null;
+        let sql = `SELECT s.*, p.product_code, p.product_name, p.category, p.uom_type, p.uom_per_pallet, p.velocity_class
                FROM stock s
                JOIN products p ON s.product_id = p.id
                WHERE s.quantity > 0`;
@@ -56,6 +72,10 @@ let StockActions = class StockActions {
         if (status) {
             params.push(status);
             sql += ` AND s.stock_status = $${params.length}`;
+        }
+        if (year) {
+            params.push(year);
+            sql += ` AND EXTRACT(YEAR FROM s.expiry_date) = $${params.length}`;
         }
         if (expiring) {
             sql += ` AND s.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '90 days' ORDER BY s.expiry_date ASC`;
@@ -289,12 +309,123 @@ let StockActions = class StockActions {
         await this.activity.log('REPAIR_LEDGER', 'ledger', 'Ledger', null, null, 'Perbaiki seluruh data ledger', null, null, this.actCtx(ctx));
         return { ok: true };
     }
+    static HOLD_STATUSES = ['on_hold', 'quarantine', 'damaged'];
+    async hold(ctx) {
+        const d = ctx.body;
+        const stockId = Number.parseInt(d.stock_id ?? '0', 10) || 0;
+        const status = String(d.status ?? '').trim().toLowerCase();
+        const reason = String(d.reason ?? '').trim();
+        if (!stockId)
+            throw api_exception_1.ApiException.badRequest('stock_id wajib diisi.');
+        if (!StockActions_1.HOLD_STATUSES.includes(status)) {
+            throw api_exception_1.ApiException.badRequest(`status harus salah satu dari: ${StockActions_1.HOLD_STATUSES.join(', ')}`);
+        }
+        if (!reason)
+            throw api_exception_1.ApiException.badRequest('Alasan hold wajib diisi.');
+        const stock = await this.getById(stockId);
+        if (!stock)
+            throw api_exception_1.ApiException.badRequest('Stock tidak ditemukan.');
+        if (String(stock.hold_status ?? 'available') === status) {
+            throw api_exception_1.ApiException.badRequest(`Stock sudah berstatus ${status}.`);
+        }
+        await this.db.transaction(async (client) => {
+            await client.query(`UPDATE stock SET hold_status = $1, hold_reason = $2, hold_by = $3, hold_at = NOW(), updated_at = NOW() WHERE id = $4`, [status, reason, ctx.user.id, stockId]);
+            await this.addHoldLedger(client, stock, status, reason, ctx, stockId);
+        });
+        await this.activity.log('STOCK_HOLD', 'stock', 'Stock', stockId, null, `Hold stok ID ${stockId} → ${status} (${reason})`, { hold_status: stock.hold_status ?? 'available' }, { hold_status: status }, this.actCtx(ctx));
+        return { ok: true };
+    }
+    async release(ctx) {
+        const d = ctx.body;
+        const stockId = Number.parseInt(d.stock_id ?? '0', 10) || 0;
+        const reason = String(d.reason ?? '').trim();
+        if (!stockId)
+            throw api_exception_1.ApiException.badRequest('stock_id wajib diisi.');
+        const stock = await this.getById(stockId);
+        if (!stock)
+            throw api_exception_1.ApiException.badRequest('Stock tidak ditemukan.');
+        const curStatus = String(stock.hold_status ?? 'available');
+        if (curStatus === 'available')
+            throw api_exception_1.ApiException.badRequest('Stock tidak sedang di-hold.');
+        await this.db.transaction(async (client) => {
+            await client.query(`UPDATE stock SET hold_status = 'available', hold_reason = NULL, hold_by = NULL, hold_at = NULL, updated_at = NOW() WHERE id = $1`, [stockId]);
+            await this.addHoldLedger(client, stock, 'available', reason, ctx, stockId);
+        });
+        await this.activity.log('STOCK_RELEASE', 'stock', 'Stock', stockId, null, `Release stok ID ${stockId}${reason ? ` (${reason})` : ''}`, { hold_status: curStatus }, { hold_status: 'available' }, this.actCtx(ctx));
+        return { ok: true };
+    }
+    async addHoldLedger(client, stock, status, reason, ctx, stockId) {
+        const balR = await client.query(`SELECT COALESCE(SUM(quantity_in),0) - COALESCE(SUM(quantity_out),0) AS running_balance
+       FROM stock_ledger WHERE product_id = $1`, [stock.product_id]);
+        const balance = Number(balR.rows[0]?.running_balance ?? 0);
+        const isRelease = status === 'available';
+        const type = isRelease ? 'RELEASE' : 'HOLD';
+        await client.query(`INSERT INTO stock_ledger
+         (transaction_date, product_id, transaction_type, reference_type,
+          reference_id, reference_number, batch_number, quantity_in,
+          quantity_out, uom, balance, location, notes)
+       VALUES (CURRENT_DATE,$1,$2,'Stock',$3,NULL,$4,0,0,$5,$6,$7,$8)`, [
+            stock.product_id,
+            type,
+            stockId,
+            stock.batch_number,
+            stock.uom_type ?? stock.uom,
+            balance,
+            stock.location,
+            isRelease
+                ? `Stock ${stockId} di-release${reason ? `: ${reason}` : ''} oleh ${ctx.user.username}`
+                : `Stock ${stockId} di-hold (${status})${reason ? `: ${reason}` : ''} oleh ${ctx.user.username}`,
+        ]);
+    }
+    async scan(ctx) {
+        const code = String(ctx.query.code ?? ctx.body.code ?? '').trim();
+        if (!code)
+            throw api_exception_1.ApiException.badRequest('Kode wajib diisi.');
+        const r = await this.db.query(`SELECT p.id, p.product_code, p.product_name, p.uom_type, p.uom_per_pallet,
+              p.default_location,
+              COALESCE((SELECT s.location FROM stock s
+                        WHERE s.product_id = p.id AND s.stock_status = 'Available'
+                          AND (s.hold_status = 'available' OR s.hold_status IS NULL)
+                          AND s.quantity > 0 AND s.location NOT IN ('QUA_SHELL','STAGING')
+                        ORDER BY s.expiry_date ASC NULLS LAST, s.id ASC
+                        LIMIT 1), p.default_location) AS expected_location
+       FROM products p
+       WHERE p.product_code = $1 AND p.is_active = 1
+       LIMIT 1`, [code]);
+        const row = r.rows[0];
+        if (!row)
+            return { found: false, code };
+        return {
+            found: true,
+            code,
+            product: {
+                id: Number(row.id),
+                product_code: row.product_code,
+                product_name: row.product_name,
+                uom_type: row.uom_type,
+                uom_per_pallet: Number(row.uom_per_pallet),
+                default_location: row.default_location ?? null,
+            },
+            expected_location: row.expected_location ?? null,
+        };
+    }
+    async scanOverride(ctx) {
+        const code = String(ctx.body.code ?? '').trim();
+        const reason = String(ctx.body.reason ?? '').trim();
+        const context = String(ctx.body.context ?? '').trim();
+        if (!code)
+            throw api_exception_1.ApiException.badRequest('Kode wajib diisi.');
+        if (!reason)
+            throw api_exception_1.ApiException.badRequest('Alasan override wajib diisi.');
+        await this.activity.log('SCAN_OVERRIDE', 'stock', 'Stock', null, null, `Scan mismatch di-override${context ? ` [${context}]` : ''}: '${code}' — ${reason}`, { scanned: code, context: context || null }, { reason }, this.actCtx(ctx));
+        return { ok: true };
+    }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };
     }
 };
 exports.StockActions = StockActions;
-exports.StockActions = StockActions = __decorate([
+exports.StockActions = StockActions = StockActions_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [db_service_1.DbService,
         activity_logger_1.ActivityLogger,

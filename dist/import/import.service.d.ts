@@ -12,6 +12,7 @@ export declare class ImportService {
     stockPreview(req: any): Promise<Q>;
     stockCommit(body: Q): Promise<Q>;
     private stockCommitTx;
+    private addImportLedger;
     runInbound(req: any): Promise<Q>;
     private lookupProduct;
     private inboundNumber;
@@ -21,6 +22,8 @@ export declare class ImportService {
     private createOutbound;
     private outboundNumber;
     private fefoAllocation;
+    private reduceStockForOutboundItem;
+    private addOutboundLedger;
     runAuto(req: any): Promise<Q>;
     private autoProcessMaster;
     private autoEnsureProducts;

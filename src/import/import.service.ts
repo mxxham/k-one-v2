@@ -190,7 +190,11 @@ export class ImportService {
         locationCache[l] = true;
         return;
       }
-      await q("INSERT INTO location_master (location_code, zone, is_active) VALUES ($1, 'Bulk', 1)", [l]);
+      const m = /^([A-Z]{2})(\d{2})([A-E])(\d{2})$/.exec(l);
+      await q(
+        "INSERT INTO location_master (location_code, aisle, rack, row_name, position, zone, is_active) VALUES ($1,$2,$3,$4,$5,'Bulk',1)",
+        [l, m ? m[1] : null, m ? m[1] + m[2] : null, m ? m[3] : null, m ? m[4] : null],
+      );
       locationCache[l] = true;
       autoLocations++;
     };
@@ -232,9 +236,13 @@ export class ImportService {
       const existing = chk.rows[0];
 
       if (mode === 'replace' && existing) {
+        const oldQty = Number(existing.quantity ?? 0);
+        const diff = Number(row.quantity ?? 0) - oldQty;
         await q('UPDATE stock SET quantity=$1, pallet=$2, manufacture_date=$3, expiry_date=$4, uom=$5, updated_at=NOW() WHERE id=$6', [
           row.quantity, row.pallet ?? Math.ceil(row.quantity / 4), row.manufacture_date, row.expiry_date, row.uom, existing.id,
         ]);
+        const refNo = refPrefix + String(imported + 1).padStart(4, '0');
+        await this.addImportLedger(q, row, diff, refNo);
         imported++;
         continue;
       }
@@ -242,6 +250,8 @@ export class ImportService {
         const newQty = Number(existing.quantity ?? 0) + row.quantity;
         const newPlt = Math.ceil(newQty / (row.uom_per_pallet ?? 4));
         await q('UPDATE stock SET quantity=$1, pallet=$2, updated_at=NOW() WHERE id=$3', [newQty, newPlt, existing.id]);
+        const refNo = refPrefix + String(imported + 1).padStart(4, '0');
+        await this.addImportLedger(q, row, Number(row.quantity ?? 0), refNo);
         imported++;
         continue;
       }
@@ -277,6 +287,33 @@ export class ImportService {
       imported++;
     }
     return { imported, skipped, auto_created: autoCreated, auto_locations: autoLocations };
+  }
+
+  private async addImportLedger(q: QFn, row: Q, delta: number, refNo: string): Promise<void> {
+    if (Math.abs(delta) < 0.001) return;
+    const bal = await q(
+      `SELECT COALESCE(SUM(quantity),0) as bal FROM stock WHERE product_id=$1 AND stock_status='Available'`,
+      [row.product_id],
+    );
+    const balance = bal.rows[0].bal;
+    const isIn = delta > 0;
+    await q(
+      `INSERT INTO stock_ledger (transaction_date, product_id, batch_number, transaction_type,
+         quantity_in, quantity_out, uom, pallet, reference_number, reference_type, balance, location, notes)
+       VALUES (CURRENT_DATE,$1,$2,${isIn ? "'IN'" : "'OUT'"},$3,$4,$5,$6,$7,'Stock Import',$8,$9,$10)`,
+      [
+        row.product_id,
+        row.batch_number || null,
+        isIn ? delta : 0,
+        isIn ? 0 : Math.abs(delta),
+        row.uom,
+        row.pallet ?? Math.ceil(Math.abs(delta) / 4),
+        refNo,
+        balance,
+        row.location || null,
+        row.notes || 'Direct stock import',
+      ],
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -540,6 +577,9 @@ export class ImportService {
       }
 
       let ordersCreated = 0;
+      let ordersReused = 0;
+      let ordersSkipped = 0;
+      let ordersShipped = 0;
       let itemsImported = 0;
       let rowsSkipped = 0;
       const log: string[] = [];
@@ -570,20 +610,53 @@ export class ImportService {
           if (!customerId) throw ApiException.badRequest('Tidak ada customer di database. Tambahkan customer terlebih dahulu.');
         }
 
-        const outboundData = {
-          order_date: planDate,
-          customer_id: customerId,
-          shipment_number: shipmentNum.startsWith('NO_SHIPMENT') ? null : shipmentNum,
-          ship_to_name: shipToName || null,
-          ship_to_location: shipToLoc || null,
-          kota: shipToLoc || null,
-          expected_date: planDate,
-          status: 'Open',
-          notes: 'Imported from Excel | Shipment: ' + (shipmentNum.startsWith('NO_SHIPMENT') ? '—' : shipmentNum),
-        };
-        const outboundId = Number((await this.createOutbound(q, outboundData, userId)).rows[0].id);
-        ordersCreated++;
-        log.push(`Order #${outboundId} — Shipment: ${shipmentNum} (${shipToName}, ${rows.length} items)`);
+        const realShipment = shipmentNum.startsWith('NO_SHIPMENT') ? null : shipmentNum;
+
+        // Dedup: reuse an existing outbound for this RAMCO shipment number.
+        let existing: any = null;
+        if (realShipment) {
+          const exRes = await q(
+            'SELECT id, status, order_number FROM outbound_orders WHERE shipment_number=$1 ORDER BY id DESC LIMIT 1',
+            [realShipment],
+          );
+          existing = exRes.rows[0] ?? null;
+        }
+        if (existing && ['Shipped', 'Completed', 'Delivered'].includes(existing.status)) {
+          ordersSkipped++;
+          log.push(`Shipment ${shipmentNum} sudah dikirim (${existing.order_number}, status ${existing.status}) — dilewati`);
+          continue;
+        }
+
+        let outboundId: number;
+        let orderNumber: string | null = null;
+        if (existing) {
+          outboundId = Number(existing.id);
+          orderNumber = existing.order_number;
+          ordersReused++;
+          await q(
+            `DELETE FROM outbound_item_locations WHERE outbound_item_id IN (SELECT id FROM outbound_items WHERE outbound_order_id=$1)`,
+            [outboundId],
+          );
+          await q('DELETE FROM outbound_items WHERE outbound_order_id=$1', [outboundId]);
+          await q('DELETE FROM outbound_destinations WHERE outbound_id=$1', [outboundId]);
+          log.push(`Shipment ${shipmentNum} sudah ada (${orderNumber}, status ${existing.status}) — di-reimport lalu dikirim`);
+        } else {
+          const outboundData = {
+            order_date: planDate,
+            customer_id: customerId,
+            shipment_number: realShipment,
+            ship_to_name: shipToName || null,
+            ship_to_location: shipToLoc || null,
+            kota: shipToLoc || null,
+            expected_date: planDate,
+            status: 'Open',
+            notes: 'Imported from Excel | Shipment: ' + (realShipment || '—'),
+          };
+          const ins = await this.createOutbound(q, outboundData, userId);
+          outboundId = Number(ins.rows[0].id);
+          ordersCreated++;
+          log.push(`Order #${outboundId} — Shipment: ${shipmentNum} (${shipToName}, ${rows.length} items)`);
+        }
 
         const primaryDestKey = String(shipToName || '') + '|' + String(shipToLoc || '');
         const destMap: Record<string, number> = {};
@@ -655,15 +728,20 @@ export class ImportService {
           const destId = dKey.toLowerCase() === primaryDestKey.toLowerCase() ? null : (destMap[dKey] ?? null);
 
           const fefo = await this.fefoAllocation(q, Number(product.id), deliveryQty);
-          let firstBatch: string | null = null;
-          let firstLoc: string | null = null;
-          let firstExpDate = expDate;
-
           if (fefo.total_available <= 0) {
             log.push(`SKIP (stok 0): ${product.product_name} [${materialRaw}] — ${deliveryQty} ${uom}`);
             rowsSkipped++;
             continue;
           }
+          if (!fefo.sufficient) {
+            log.push(`SKIP (stok kurang): ${product.product_name} [${materialRaw}] — butuh ${deliveryQty} ${uom}, tersedia ${fefo.total_available}`);
+            rowsSkipped++;
+            continue;
+          }
+
+          let firstBatch: string | null = null;
+          let firstLoc: string | null = null;
+          let firstExpDate = expDate;
           if (fefo.allocation.length > 0) {
             firstBatch = fefo.allocation[0].batch_number ?? null;
             firstLoc = fefo.allocation[0].location ?? null;
@@ -679,45 +757,53 @@ export class ImportService {
           );
           const outboundItemId = Number(item.rows[0].id);
 
-          if (fefo.allocation.length > 0) {
-            for (const alloc of fefo.allocation) {
-              if (!alloc.location) continue;
-              const slRow = await q(
-                `SELECT sl.id FROM stock_locations sl JOIN stock s ON sl.stock_id = s.id
-                 WHERE s.product_id=$1 AND sl.location_code=$2 AND sl.status IN ('Available','Reserved')
-                 ORDER BY sl.id ASC LIMIT 1`,
-                [product.id, alloc.location],
-              );
-              if (slRow.rows.length > 0) {
-                await q(
-                  `INSERT INTO outbound_item_locations (outbound_item_id, stock_location_id, quantity) VALUES ($1,$2,$3)
-                   ON CONFLICT (outbound_item_id, stock_location_id) DO NOTHING`,
-                  [outboundItemId, Number(slRow.rows[0].id), alloc.required_qty ?? alloc.quantity ?? 0],
-                );
-              }
-            }
-          }
+          await this.reduceStockForOutboundItem(q, Number(product.id), uom, outboundItemId, fefo.allocation);
 
-          const fefoInfo = fefo.sufficient
-            ? `FEFO OK (${firstBatch}@${firstLoc})`
-            : `Stok kurang (tersedia ${fefo.total_available}, diminta ${deliveryQty})`;
           const destDisplay = destName ? ` → ${destName}` : '';
-          log.push(`OD:${odNo} | ${product.product_name} | ${deliveryQty} ${uom}${destDisplay} | ${fefoInfo}`);
+          log.push(`OD:${odNo} | ${product.product_name} | ${deliveryQty} ${uom}${destDisplay} | FEFO OK (${firstBatch}@${firstLoc}) | SHIPPED`);
           itemsImported++;
         }
 
         const orderItemCount = await q('SELECT COUNT(*)::int as c FROM outbound_items WHERE outbound_order_id=$1', [outboundId]);
         if (Number(orderItemCount.rows[0].c) === 0) {
           await q('DELETE FROM outbound_orders WHERE id=$1', [outboundId]);
-          ordersCreated--;
+          if (!existing) ordersCreated--;
           log.push(`Order #${outboundId} (${shipmentNum}) dihapus — semua item tidak ada di stok`);
+          continue;
         }
+
+        // RAMCO schedule = reality: mark the outbound Shipped + write OUT ledger.
+        let shippedNumber: string;
+        if (orderNumber === null) {
+          const onRes = await q('SELECT order_number FROM outbound_orders WHERE id=$1', [outboundId]);
+          shippedNumber = onRes.rows[0]?.order_number ?? String(outboundId);
+        } else {
+          shippedNumber = orderNumber;
+        }
+        await q(
+          `UPDATE outbound_orders SET status='Shipped', shipped_date=$1, shipped_by=$2, updated_at=NOW() WHERE id=$3`,
+          [planDate, userId, outboundId],
+        );
+        ordersShipped++;
+        const itemRows = (await q('SELECT * FROM outbound_items WHERE outbound_order_id=$1', [outboundId])).rows;
+        for (const item of itemRows) {
+          await this.addOutboundLedger(q, item, { id: outboundId, order_number: shippedNumber });
+        }
+        log.push(`Shipment ${shipmentNum} → SHIPPED (${shippedNumber}) — stok berkurang`);
       }
 
       return {
         success: true,
-        message: `Import selesai: ${ordersCreated} orders, ${itemsImported} items dari ${Object.keys(shipmentData).length} shipments`,
-        stats: { orders_created: ordersCreated, items_imported: itemsImported, rows_skipped: rowsSkipped, errors: 0 },
+        message: `Import selesai: ${ordersCreated} orders baru, ${ordersReused} di-update, ${ordersShipped} dikirim, ${itemsImported} items dari ${Object.keys(shipmentData).length} shipments`,
+        stats: {
+          orders_created: ordersCreated,
+          orders_reused: ordersReused,
+          orders_skipped: ordersSkipped,
+          orders_shipped: ordersShipped,
+          items_imported: itemsImported,
+          rows_skipped: rowsSkipped,
+          errors: 0,
+        },
         log,
       };
     };
@@ -766,6 +852,7 @@ export class ImportService {
        FROM stock st
        WHERE st.product_id = $1
          AND (st.stock_status IN ('Available','Dues In') OR st.stock_status IS NULL OR st.stock_status = '')
+         AND (st.hold_status = 'available' OR st.hold_status IS NULL)
          AND st.quantity > 0
          AND (st.location IS NULL OR st.location NOT IN ('QUA_SHELL','STAGING'))
        ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END ASC, expiry_date ASC, st.id ASC`,
@@ -799,6 +886,136 @@ export class ImportService {
     };
   }
 
+  /**
+   * Decrements stock for the FEFO allocation of a shipped outbound item and
+   * records the exact batch+location picks in outbound_item_locations.
+   * Mirrors outbound.service pickItems (stock + stock_locations handling).
+   */
+  private async reduceStockForOutboundItem(
+    q: QFn,
+    productId: number,
+    uom: string,
+    outboundItemId: number,
+    allocation: any[],
+  ): Promise<void> {
+    let usedBatch: string | null = null;
+    let usedLocation: string | null = null;
+    let firstExpiry: any = null;
+    const pickedRows: any[] = [];
+
+    for (const alloc of allocation) {
+      if (!alloc.stock_id) continue;
+      const take = Number(alloc.required_qty ?? 0);
+      if (take <= 0.001) continue;
+      const sRes = await q('SELECT id, quantity, pallet, batch_number, location, expiry_date FROM stock WHERE id=$1', [alloc.stock_id]);
+      const stock = sRes.rows[0];
+      if (!stock) continue;
+      const deduct = Math.min(take, Number(stock.quantity));
+      if (deduct <= 0.001) continue;
+
+      const newQty = Number(stock.quantity) - deduct;
+      if (newQty <= 0.001) {
+        await q(`UPDATE stock SET quantity=0, pallet=0, stock_status='Available', updated_at=NOW() WHERE id=$1`, [stock.id]);
+      } else {
+        const ratio = Number(stock.quantity) > 0 ? deduct / Number(stock.quantity) : 0;
+        const newPlt = Math.max(0, Number(stock.pallet ?? 0) * (1 - ratio));
+        await q(
+          `UPDATE stock SET quantity=$1, pallet=$2, stock_status='Available', updated_at=NOW() WHERE id=$3`,
+          [Number(newQty.toFixed(4)), Number(newPlt.toFixed(4)), stock.id],
+        );
+      }
+
+      // stock_locations handling (mirror pickItems)
+      const slRes = await q(`SELECT id, quantity FROM stock_locations WHERE stock_id=$1 AND status='Available' ORDER BY pallet_seq ASC LIMIT 1`, [stock.id]);
+      let sl = slRes.rows[0];
+      let slId: number | null = null;
+      if (sl) {
+        slId = Number(sl.id);
+        const slNewQty = Math.max(0, Number(sl.quantity) - deduct);
+        await q(`UPDATE stock_locations SET quantity=$1, status=$2 WHERE id=$3`, [slNewQty, slNewQty <= 0 ? 'Picked' : 'Available', slId]);
+      } else {
+        const slFind = await q(
+          `SELECT sl.id, sl.quantity
+           FROM stock_locations sl JOIN stock sx ON sx.id = sl.stock_id
+           WHERE sx.product_id=$1 AND sx.batch_number IS NOT DISTINCT FROM $2 AND sx.location IS NOT DISTINCT FROM $3
+             AND sl.status IN ('Available','Picked')
+           ORDER BY (sl.status='Available') DESC, sl.pallet_seq ASC LIMIT 1`,
+          [productId, stock.batch_number ?? null, stock.location ?? null],
+        );
+        sl = slFind.rows[0];
+        if (sl) {
+          slId = Number(sl.id);
+          const slNewQty = Math.max(0, Number(sl.quantity) - deduct);
+          await q(`UPDATE stock_locations SET quantity=$1, status=$2 WHERE id=$3`, [slNewQty, slNewQty <= 0 ? 'Picked' : 'Available', slId]);
+        } else {
+          const insSl = await q(
+            `INSERT INTO stock_locations (stock_id, location_code, pallet_seq, quantity, original_quantity, uom, is_full_pallet, batch_number, inbound_item_id, status)
+             VALUES (NULL,$1,999,0,$2,$3,0,$4,NULL,'Picked') RETURNING id`,
+            [stock.location ?? 'UNALLOCATED', deduct, uom, stock.batch_number ?? null],
+          );
+          slId = Number(insSl.rows[0].id);
+        }
+      }
+
+      pickedRows.push({
+        stock_location_id: slId,
+        location: stock.location,
+        batch: stock.batch_number,
+        quantity: deduct,
+        expiry_date: stock.expiry_date,
+      });
+      if (!usedBatch) usedBatch = stock.batch_number;
+      if (!usedLocation) usedLocation = stock.location;
+      if (firstExpiry === null) firstExpiry = stock.expiry_date ?? null;
+    }
+
+    await q('DELETE FROM outbound_item_locations WHERE outbound_item_id=$1', [outboundItemId]);
+    for (const pr of pickedRows) {
+      if (pr.stock_location_id) {
+        await q(
+          `INSERT INTO outbound_item_locations (outbound_item_id, stock_location_id, quantity) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+          [outboundItemId, pr.stock_location_id, pr.quantity],
+        );
+      }
+    }
+
+    await q(
+      `UPDATE outbound_items SET batch_no=$1, batch_number=$1, location=COALESCE($2, location), exp_date=$3 WHERE id=$4`,
+      [usedBatch, usedLocation, firstExpiry, outboundItemId],
+    );
+  }
+
+  /** Writes a stock_ledger OUT row for a shipped outbound item (mirror outbound.service ship). */
+  private async addOutboundLedger(q: QFn, item: any, outbound: { id: number; order_number: string }): Promise<void> {
+    const balR = await q(
+      `SELECT COALESCE(SUM(quantity_in),0) - COALESCE(SUM(quantity_out),0) AS running_balance
+       FROM stock_ledger WHERE product_id = $1`,
+      [Number(item.product_id)],
+    );
+    const balance = Number(balR.rows[0].running_balance ?? 0) - Number(item.actual_qty ?? 0);
+
+    await q(
+      `INSERT INTO stock_ledger
+         (transaction_date, product_id, transaction_type, reference_type,
+          reference_id, reference_number, batch_number, quantity_in,
+          quantity_out, uom, pallet, balance, location, notes)
+       VALUES ($1,$2,'OUT','Outbound',$3,$4,$5,0,$6,$7,$8,$9,$10,$11)`,
+      [
+        todayStr(),
+        item.product_id,
+        outbound.id,
+        outbound.order_number,
+        item.batch_no ?? null,
+        item.actual_qty ?? 0,
+        item.uom,
+        item.pallet,
+        balance,
+        item.location,
+        '[Outbound] Shipped | Status: Shipped | ' + outbound.order_number,
+      ],
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // AUTO import — multi-sheet pipeline in one transaction
   // ---------------------------------------------------------------------------
@@ -811,6 +1028,7 @@ export class ImportService {
 
     return this.db.transaction(async (client) => {
       const q = (t: string, p?: any[]) => client.query(t, p ?? []);
+      await q('SELECT pg_advisory_xact_lock($1)', [824961]);
 
       const report: Q = {
         products_created: 0, products_updated: 0,
@@ -839,7 +1057,7 @@ export class ImportService {
         rows = await this.stockValidate(q, rows);
         report.stock_auto_created += await this.autoEnsureProducts(q, rows);
 
-        const commit = await this.stockCommitTx(client, rows, 'add');
+        const commit = await this.stockCommitTx(client, rows, 'skip');
         report.stock_imported += commit.imported;
         report.stock_skipped += commit.skipped;
 
@@ -959,11 +1177,20 @@ export class ImportService {
     let items = 0;
     for (const [gr, groupRows] of Object.entries(groups)) {
       const orderDate = gr === 'NO_GR_DATE' ? todayStr() : gr;
+      const note = 'Auto import (WMS) — GR: ' + gr;
+      const existingInb = await q(
+        `SELECT id, order_number FROM inbound_orders WHERE order_date=$1 AND status='Completed' AND notes=$2 LIMIT 1`,
+        [orderDate, note],
+      );
+      if (existingInb.rows.length > 0) {
+        log.push(`Inbound (GR: ${gr}) sudah ada — ${existingInb.rows[0].order_number}, dilewati`);
+        continue;
+      }
       const orderNumber = await this.inboundNumberFromQ(q);
       const ins = await q(
         `INSERT INTO inbound_orders (order_number, order_date, carrier_name, status, notes, created_by)
          VALUES ($1,$2,NULL,'Completed',$3,$4) RETURNING id`,
-        [orderNumber, orderDate, 'Auto import (WMS) — GR: ' + gr, userId],
+        [orderNumber, orderDate, note, userId],
       );
       const inboundId = Number(ins.rows[0].id);
       let i = 0;

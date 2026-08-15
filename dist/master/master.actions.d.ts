@@ -44,4 +44,5 @@ export declare class MasterActions {
     private userUpdate;
     private userDelete;
     private actCtx;
+    private locationParseCodes;
 }

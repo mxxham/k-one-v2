@@ -44,3 +44,24 @@ export function setPermission(module: string, action: string, level: 'write' | '
 export function getPermission(module: string, action: string): 'write' | 'admin' | 'any' {
   return permissions.get(`${module}::${action}`) ?? 'any';
 }
+
+/**
+ * Department requirements per action. A module-level default applies to every
+ * action in the module; a per-action override wins. When set, only users whose
+ * department is in the list (or department === 'all', which always passes) may
+ * run the action. Unset means no department restriction.
+ */
+const departmentDefaults = new Map<string, string[]>();
+const departmentOverrides = new Map<string, string[]>();
+
+export function setModuleDepartments(module: string, departments: string[]): void {
+  departmentDefaults.set(module, departments);
+}
+
+export function setActionDepartments(module: string, action: string, departments: string[]): void {
+  departmentOverrides.set(`${module}::${action}`, departments);
+}
+
+export function getDepartments(module: string, action: string): string[] | undefined {
+  return departmentOverrides.get(`${module}::${action}`) ?? departmentDefaults.get(module);
+}

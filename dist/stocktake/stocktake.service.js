@@ -103,20 +103,21 @@ let StockTakeService = class StockTakeService {
         let scopeLocs = data.scope_locations ?? null;
         if (Array.isArray(scopeLocs))
             scopeLocs = JSON.stringify(scopeLocs);
-        const scopeType = scopeLocs !== null && scopeLocs !== '[]' ? 'location' : 'full';
-        const r = await this.db.query(`INSERT INTO stock_take (take_number, take_date, status, notes, scope_locations, scope_type, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [
+        const scopeType = data.scope_type ?? (scopeLocs !== null && scopeLocs !== '[]' ? 'location' : 'full');
+        const r = await this.db.query(`INSERT INTO stock_take (take_number, take_date, status, notes, scope_locations, scope_type, schedule_id, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, [
             takeNumber,
             data.take_date,
             data.status ?? 'Draft',
             data.notes ?? null,
             scopeLocs,
             scopeType,
+            data.schedule_id ?? null,
             userId,
         ]);
         return Number(r.rows[0].id);
     }
-    async autoLoadByLocations(stockTakeId, locations) {
+    async autoLoadByLocations(stockTakeId, locations, velocityClass) {
         let sql = `SELECT s.product_id, s.batch_number, s.location, s.quantity, s.uom
                FROM stock s
                WHERE s.stock_status='Available' AND s.quantity>0
@@ -127,6 +128,10 @@ let StockTakeService = class StockTakeService {
             const ph = locations.map((_, i) => `$${i + 1}`).join(',');
             sql += ` AND s.location IN (${ph})`;
             params.push(...locations);
+        }
+        if (velocityClass) {
+            params.push(velocityClass);
+            sql += ` AND s.product_id IN (SELECT id FROM products WHERE velocity_class = $${params.length})`;
         }
         sql += ' ORDER BY s.location, s.product_id';
         const r = await this.db.query(sql, params);

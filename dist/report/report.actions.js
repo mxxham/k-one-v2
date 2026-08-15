@@ -25,6 +25,9 @@ let ReportActions = class ReportActions {
             stats: (c) => this.dashboardStats(c),
             aisle_detail: (c) => this.aisleDetail(c),
             check_expiry_alerts: (c) => this.checkExpiryAlerts(c),
+            fefo_queue: (c) => this.fefoQueue(c),
+            alerts: (c) => this.dashboardAlerts(c),
+            insights: (c) => this.dashboardInsights(c),
         });
         (0, registry_1.registerActions)('report', {
             daily: (c) => this.daily(c),
@@ -42,6 +45,10 @@ let ReportActions = class ReportActions {
             reset_operational_data: (c) => this.resetOperationalData(c),
         });
         (0, registry_1.setPermission)('system', 'reset_operational_data', 'admin');
+        (0, registry_1.setModuleDepartments)('dashboard', ['all']);
+        (0, registry_1.setModuleDepartments)('report', ['all']);
+        (0, registry_1.setModuleDepartments)('activitylog', ['all']);
+        (0, registry_1.setModuleDepartments)('system', ['all']);
     }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };
@@ -57,6 +64,16 @@ let ReportActions = class ReportActions {
     }
     async checkExpiryAlerts(_ctx) {
         return this.report.checkExpiryAlerts();
+    }
+    async fefoQueue(ctx) {
+        const limit = Number.parseInt(ctx.query.limit ?? '50', 10) || 50;
+        return this.report.fefoQueue(limit);
+    }
+    async dashboardAlerts(_ctx) {
+        return this.report.dashboardAlerts();
+    }
+    async dashboardInsights(_ctx) {
+        return this.report.dashboardInsights();
     }
     async daily(ctx) {
         const date = ctx.query.date ? String(ctx.query.date) : null;

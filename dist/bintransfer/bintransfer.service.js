@@ -136,8 +136,9 @@ let BinTransferService = class BinTransferService {
             const ins = await client.query(`INSERT INTO bin_transfers
            (transfer_number, transfer_date, product_id, stock_id,
             batch_number, from_location, to_location,
-            quantity, uom, reason, status, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Pending',$11) RETURNING id`, [
+            quantity, uom, reason, status, created_by,
+            transfer_type, pick_face_target_id, is_breakdown)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Pending',$11,$12,$13,$14) RETURNING id`, [
                 number,
                 data.transfer_date,
                 data.product_id,
@@ -149,6 +150,9 @@ let BinTransferService = class BinTransferService {
                 data.uom ?? 'Drum',
                 data.reason ?? null,
                 userId,
+                data.transfer_type ?? 'MANUAL',
+                data.pick_face_target_id != null ? Number(data.pick_face_target_id) : null,
+                data.is_breakdown !== undefined ? Number(data.is_breakdown) : 0,
             ]);
             return Number(ins.rows[0].id);
         });
@@ -238,8 +242,31 @@ let BinTransferService = class BinTransferService {
             const currentBalance = Number(bal.rows[0]?.balance ?? 0);
             await this.addLedger(client, productId, 'TRANSFER_OUT', 'BinTransfer', transferId, transfer.transfer_number, usedBatch, 0, qty, uom, fromLoc, `Bin Transfer ke ${toLoc}`, currentBalance);
             await this.addLedger(client, productId, 'TRANSFER_IN', 'BinTransfer', transferId, transfer.transfer_number, usedBatch, qty, 0, uom, toLoc, `Bin Transfer dari ${fromLoc}`, currentBalance);
+            await this.convertDestPalletFunction(client, destStockId, toLoc, qty, transfer, uom, usedBatch);
             await client.query(`UPDATE bin_transfers SET status='Completed', completed_by=$1, completed_at=NOW(), updated_at=NOW() WHERE id=$2`, [userId, transferId]);
         });
+    }
+    async convertDestPalletFunction(client, destStockId, toLoc, qty, transfer, uom, batchNumber) {
+        const destLoc = await client.query(`SELECT lm.is_pick_face, lm.row_name FROM location_master lm WHERE lm.location_code = $1 LIMIT 1`, [toLoc]);
+        const isPickFace = Number(destLoc.rows[0]?.is_pick_face ?? 0) === 1 || (destLoc.rows[0]?.row_name ?? '') === 'A';
+        if (!isPickFace)
+            return;
+        const upp = Math.max(1, Number(transfer.uom_per_pallet ?? 4) || 4);
+        const isFull = qty >= upp - 0.001;
+        const existing = await client.query(`SELECT id, quantity FROM stock_locations
+       WHERE stock_id = $1 AND location_code = $2 AND status = 'Available'
+       ORDER BY pallet_seq ASC LIMIT 1`, [destStockId, toLoc]);
+        if (existing.rows.length > 0) {
+            await client.query(`UPDATE stock_locations
+         SET quantity = $1, pallet_function = 'PICK_FACE',
+             is_full_pallet = $2, updated_at = NOW()
+         WHERE id = $3`, [Number(existing.rows[0].quantity) + qty, isFull ? 1 : 0, existing.rows[0].id]);
+            return;
+        }
+        await client.query(`INSERT INTO stock_locations
+         (stock_id, location_code, pallet_seq, quantity, original_quantity, uom,
+          is_full_pallet, batch_number, status, pallet_function)
+       VALUES ($1,$2,$3,$4,$4,$5,$6,$7,'Available','PICK_FACE')`, [destStockId, toLoc, 1, qty, uom, isFull ? 1 : 0, batchNumber]);
     }
     async cancel(transferId) {
         const transfer = await this.getById(transferId);

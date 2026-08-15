@@ -50,6 +50,7 @@ let OutboundActions = class OutboundActions {
         (0, registry_1.setPermission)('outbound', 'delete', 'write');
         (0, registry_1.setPermission)('outbound', 'pick_items', 'write');
         (0, registry_1.setPermission)('outbound', 'ship', 'write');
+        (0, registry_1.setModuleDepartments)('outbound', ['outbound']);
     }
     actCtx(ctx) {
         return { user_id: ctx.user.id, username: ctx.user.username, full_name: ctx.user.full_name, ip_address: ctx.raw?.ip ?? null };

@@ -42,6 +42,7 @@ let ImportActions = class ImportActions {
         (0, registry_1.setPermission)('import', 'stock_commit', 'write');
         (0, registry_1.setPermission)('import', 'auto', 'write');
         (0, registry_1.setPermission)('import', 'auto_async', 'write');
+        (0, registry_1.setModuleDepartments)('import', ['all']);
     }
     async tplInbound() {
         const r = await (0, import_templates_1.tplInbound)();

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ReportService } from './report.service';
 import { ActivityLogger } from '../common/activity-logger';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 
 type Q = Record<string, any>;
@@ -16,6 +16,9 @@ export class ReportActions {
       stats: (c) => this.dashboardStats(c),
       aisle_detail: (c) => this.aisleDetail(c),
       check_expiry_alerts: (c) => this.checkExpiryAlerts(c),
+      fefo_queue: (c) => this.fefoQueue(c),
+      alerts: (c) => this.dashboardAlerts(c),
+      insights: (c) => this.dashboardInsights(c),
     });
     registerActions('report', {
       daily: (c) => this.daily(c),
@@ -33,6 +36,10 @@ export class ReportActions {
       reset_operational_data: (c) => this.resetOperationalData(c),
     });
     setPermission('system', 'reset_operational_data', 'admin');
+    setModuleDepartments('dashboard', ['all']);
+    setModuleDepartments('report', ['all']);
+    setModuleDepartments('activitylog', ['all']);
+    setModuleDepartments('system', ['all']);
   }
 
   private actCtx(ctx: RequestContext) {
@@ -54,6 +61,19 @@ export class ReportActions {
 
   private async checkExpiryAlerts(_ctx: RequestContext): Promise<Q> {
     return this.report.checkExpiryAlerts();
+  }
+
+  private async fefoQueue(ctx: RequestContext): Promise<Q> {
+    const limit = Number.parseInt(ctx.query.limit ?? '50', 10) || 50;
+    return this.report.fefoQueue(limit);
+  }
+
+  private async dashboardAlerts(_ctx: RequestContext): Promise<Q> {
+    return this.report.dashboardAlerts();
+  }
+
+  private async dashboardInsights(_ctx: RequestContext): Promise<Q> {
+    return this.report.dashboardInsights();
   }
 
   // ---------------------------------------------------------------------------

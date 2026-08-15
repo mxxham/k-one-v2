@@ -24,6 +24,7 @@ export declare class ExportActions {
     private ledger;
     private stock;
     private stocktake;
+    private asn;
     private report;
     private inboundReceipt;
     private putaway;
