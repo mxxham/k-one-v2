@@ -221,8 +221,6 @@ ode dist/database/migrate.js && node dist/main.js\ (idempotent). Validated: fres
 - **Validated** (scratch DB k_one_opt3, NO pre-seeded customer, isolated worker on redis db1): master sheet processed (products_created 1, ''Master data: 1 produk baru''), customer auto-created from `ship to name` -> `PT Test Dua` (code OUT-PTTESTDU, city Gresik), outbound OUT-202608-0001 references customer_id 1, inbound still Completed/ATP (Option 1 intact), `stock_ledger` still a single `Stock Import` row. Scratch stack + DB dropped, redis db1 flushed.
 - **Supersedes** the ''Not touched (orthogonal)'' remark in Decision log 17.
 - **Next**: none outstanding; dev API (:3000) + worker rebuilt and running.
-<<<<<<< HEAD
-=======
 
 ## 19. WMS Upgrade plan — deepseek-wms-upgrade-prompt.md (2026-08-14)
 
@@ -502,4 +500,3 @@ ode dist/database/migrate.js && node dist/main.js\ (idempotent). Validated: fres
   - LocationsPage.tsx: 3 tabs - Locations List / Rack Map (2D) / Rack View (3D); "New Location" button only on list tab; renders <RackViews tab />.
   - ZoningPage.tsx: removed the two map tabs + now-unused state (aisleRows/aisleBins/aisleDetail/loadingMap/bins/hoveredBin/selectedBin), loadMap/loadBins/openAisleDetail, Row helper, Map/Boxes/Rack3D/Bin3D imports. Zoning is now rules-only: UOM / Produk & Putaway Rules / Zones / Zone Aisles.
 - **Verification**: web typecheck + vite build clean. No backend change, no migration.
->>>>>>> 3493489 ( KOV better inbound)

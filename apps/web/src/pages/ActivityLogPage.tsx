@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   History, RefreshCw, Truck, PackageOpen, Boxes, Box, ClipboardList, ClipboardCheck,
-  ArrowLeftRight, Users, MapPin, BookOpen, UserCog, BarChart3, LogIn,
+  ArrowLeftRight, Users, MapPin, BookOpen, UserCog, BarChart3, LogIn, CalendarCheck2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/PageHeader';
@@ -24,6 +24,7 @@ const MODULE_ICONS: Record<string, any> = {
   users: UserCog,
   report: BarChart3,
   auth: LogIn,
+  cyclecount: CalendarCheck2,
 };
 
 function ModuleCell({ row }: { row: any }) {

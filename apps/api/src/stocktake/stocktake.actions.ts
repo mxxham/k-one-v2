@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { StockTakeService } from './stocktake.service';
 import { ActivityLogger } from '../common/activity-logger';
 import { RedisLockService } from '../common/redis-lock.service';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 import { DbService } from '../database/db.service';
 import { LOCK_KEYS } from '@k-one/shared';
@@ -49,6 +49,7 @@ export class StockTakeActions {
     setPermission('stocktake', 'finish_counting', 'write');
     setPermission('stocktake', 'save_review', 'write');
     setPermission('stocktake', 'apply_adjustment', 'admin');
+    setModuleDepartments('stocktake', ['inventory']);
   }
 
   private actCtx(ctx: RequestContext) {

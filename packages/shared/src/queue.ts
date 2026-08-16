@@ -42,4 +42,5 @@ export const LOCK_KEYS = {
   fefo: (productId: number | string) => `fefo:${productId}`,
   stocktake: (stockTakeId: number | string) => `stocktake:${stockTakeId}`,
   import: () => 'import:auto',
+  cycleCount: () => 'cycle-count:run',
 } as const;

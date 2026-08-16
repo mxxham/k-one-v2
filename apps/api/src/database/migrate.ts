@@ -2,6 +2,9 @@
  * Minimal SQL migration runner.
  * Usage: npm run migrate  (reads src/database/migrations/*.sql in order)
  */
+import { config } from 'dotenv';
+import { resolve } from 'path';
+config({ path: resolve(__dirname, '../../.env') });
 import * as fs from 'fs';
 import * as path from 'path';
 import { Pool } from 'pg';

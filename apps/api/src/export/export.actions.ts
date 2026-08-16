@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ExcelExportService } from './excel-export.service';
 import { PrintService } from './print.service';
 import { PicklistService } from '../picklist/picklist.service';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 
 type Q = Record<string, any>;
@@ -43,6 +43,7 @@ export class ExportActions {
       ledger: (c) => this.ledger(c),
       stock: (c) => this.stock(c),
       stocktake: (c) => this.stocktake(c),
+      asn: (c) => this.asn(c),
       report: (c) => this.report(c),
     });
     registerActions('print', {
@@ -54,6 +55,8 @@ export class ExportActions {
       report: (c) => this.reportPrint(c),
     });
     setPermission('print', 'picklist', 'write');
+    setModuleDepartments('export', ['all']);
+    setModuleDepartments('print', ['all']);
   }
 
   private idFrom(ctx: RequestContext): number {
@@ -96,6 +99,12 @@ export class ExportActions {
     const id = this.idFrom(ctx);
     if (!id) throw ApiException.badRequest('id wajib diisi.');
     const r = await this.excel.stocktakeReport(id);
+    return { _binary: true, ...r };
+  }
+
+  private async asn(ctx: RequestContext): Promise<BinaryResult> {
+    const status = ctx.query.status ? String(ctx.query.status) : null;
+    const r = await this.excel.asnReport(status);
     return { _binary: true, ...r };
   }
 

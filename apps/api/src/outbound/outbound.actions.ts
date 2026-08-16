@@ -4,7 +4,7 @@ import { OutboundService } from './outbound.service';
 import { ActivityLogger } from '../common/activity-logger';
 import { MasterDataService } from '../master/master-data.service';
 import { RedisLockService } from '../common/redis-lock.service';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 import { LOCK_KEYS } from '@k-one/shared';
 
@@ -38,6 +38,7 @@ export class OutboundActions {
     setPermission('outbound', 'delete', 'write');
     setPermission('outbound', 'pick_items', 'write');
     setPermission('outbound', 'ship', 'write');
+    setModuleDepartments('outbound', ['outbound']);
   }
 
   private actCtx(ctx: RequestContext) {

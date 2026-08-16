@@ -127,8 +127,6 @@ EXACT references to keep handy are in session.md -> Specs section.- [x] **S18 Le
   - Shared constants `SHIP_TO_NAME_KEYS`/`SHIP_TO_LOC_KEYS`/`MASTER_PRODUCT_CODE_KEYS` added to `packages/shared/src/import-helpers.ts` AND the API local copy `apps/api/src/import/import.helpers.ts`; used at all 12 outbound ship-to sites (worker + api) + master code resolution.
   - Validated end-to-end on scratch DB without a pre-seeded customer: master processed, customer auto-created (PT Test Dua), outbound linked; Option-1 statuses intact. Stack torn down.
   - session.md Decision log 18 (supersedes the ''not touched'' note in 17); root build + typecheck clean.
-<<<<<<< HEAD
-=======
 
 # Department-Based Roles & Dashboards (from `new-roles.md` — Phase 0)
 
@@ -381,4 +379,3 @@ Catch all 3 department dashboards + the combined one up to the current feature s
   - Requested by user: the rack maps are a picture of the locations themselves, not zoning rules; they belong under Locations.
   - Fix (frontend only): NEW `RackViews.tsx` component (extracted from `ZoningPage.tsx`) that renders the 2D aisle×level map (`putaway::aisle_map`) and the 3D rack view (`putaway::bins`) with all their state/loading logic. `LocationsPage.tsx` now has 3 tabs — Locations List / Rack Map (2D) / Rack View (3D) — and renders `<RackViews tab={...} />`. `ZoningPage.tsx` drops the two map tabs (and their now-unused state/`Row`/imports) and stays as rules-only: UOM Level Limits / Produk & Putaway Rules / Zones / Zone Aisles.
   - No backend change, no migration. Typecheck (web) + `vite build` clean (chunk warning pre-existing). Smoke: Locations → Rack Map (2D) & Rack View (3D) render as before; Zoning tab is rules-only.
->>>>>>> 3493489 ( KOV better inbound)

@@ -288,9 +288,9 @@ export default function LocationsPage() {
               <tbody className="divide-y divide-gray-100">
                 {rows.map((l) => (
                   <tr key={l.id} className="hover:bg-brand-50/50">
-                    <td className="px-3 py-2.5 font-semibold text-brand-700">{l.location_code}</td>
+                    <td className="px-3 py-2.5 font-semibold text-brand-700 font-mono">{l.location_code}</td>
                     <td className="px-3 py-2.5 text-gray-600">{l.aisle || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{l.rack || '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-600">{l.aisle || '—'}</td>
                     <td className="px-3 py-2.5 text-gray-600">{l.row_name || '—'}</td>
                     <td className="px-3 py-2.5 text-gray-600">{l.position || '—'}</td>
                     <td className="px-3 py-2.5">

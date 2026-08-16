@@ -7,7 +7,12 @@ import {
   Boxes,
   BookOpen,
   ClipboardCheck,
+  ClipboardList,
+  CalendarCheck2,
   ArrowLeftRight,
+  PackageSearch,
+  Layers,
+  CalendarClock,
   FileSpreadsheet,
   Wand2,
   Box,
@@ -22,10 +27,11 @@ import {
   Menu,
   X,
   Eye,
-  Layers,
+  Ruler,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { roleLabel } from '@/lib/format';
+import { Department } from '@/lib/api';
 import { LucideIcon } from 'lucide-react';
 
 interface NavItem {
@@ -33,12 +39,15 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   end?: boolean;
+  /** Departments allowed to see this item; undefined = visible to everyone. */
+  depts?: Department[];
 }
 
 interface NavSection {
   section: string;
   writeOnly?: boolean;
   adminOnly?: boolean;
+  depts?: Department[];
   items: NavItem[];
 }
 
@@ -47,17 +56,23 @@ const NAV: NavSection[] = [
     section: 'Main',
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-      { to: '/inbound', label: 'Inbound', icon: Truck },
-      { to: '/outbound', label: 'Outbound', icon: PackageOpen },
-      { to: '/stock', label: 'Stock', icon: Boxes },
-      { to: '/ledger', label: 'Stock Ledger', icon: BookOpen },
-      { to: '/stocktake', label: 'Stock Take', icon: ClipboardCheck },
-      { to: '/bin-transfer', label: 'Bin Transfer', icon: ArrowLeftRight },
+      { to: '/inbound', label: 'Inbound', icon: Truck, depts: ['inbound', 'all'] },
+      { to: '/asn', label: 'ASN', icon: CalendarClock, depts: ['inbound', 'all'] },
+      { to: '/outbound', label: 'Outbound', icon: PackageOpen, depts: ['outbound', 'all'] },
+      { to: '/picklist', label: 'Picklist', icon: ClipboardCheck, depts: ['outbound', 'all'] },
+      { to: '/waves', label: 'Wave Planning', icon: Layers, depts: ['outbound', 'all'] },
+      { to: '/stock', label: 'Stock', icon: Boxes, depts: ['inventory', 'all'] },
+      { to: '/ledger', label: 'Stock Ledger', icon: BookOpen, depts: ['inventory', 'all'] },
+      { to: '/stocktake', label: 'Stock Take', icon: ClipboardList, depts: ['inventory', 'all'] },
+      { to: '/cycle-count', label: 'Cycle Count', icon: CalendarCheck2, depts: ['inventory', 'all'] },
+      { to: '/bin-transfer', label: 'Bin Transfer', icon: ArrowLeftRight, depts: ['inventory', 'all'] },
+      { to: '/replenishment', label: 'Replenishment', icon: PackageSearch, depts: ['inventory', 'all'] },
     ],
   },
   {
     section: 'Excel Import',
     writeOnly: true,
+    depts: ['all'],
     items: [
       { to: '/import', label: 'Import Excel', icon: FileSpreadsheet },
       { to: '/import-auto', label: 'Auto Import', icon: Wand2 },
@@ -66,15 +81,17 @@ const NAV: NavSection[] = [
   {
     section: 'Master Data',
     writeOnly: true,
+    depts: ['all'],
     items: [
       { to: '/products', label: 'Products', icon: Box },
       { to: '/customers', label: 'Customers', icon: Users },
       { to: '/locations', label: 'Locations', icon: MapPin },
-      { to: '/zoning', label: 'Zoning', icon: Layers },
+      { to: '/zoning', label: 'Zoning', icon: Ruler },
     ],
   },
   {
     section: 'Reports & Tools',
+    depts: ['all'],
     items: [{ to: '/reports', label: 'Reports', icon: BarChart3 }],
   },
   {
@@ -89,7 +106,7 @@ const NAV: NavSection[] = [
 ];
 
 export default function Layout() {
-  const { user, canWrite, canAdmin, logout } = useAuth();
+  const { user, canWrite, canAdmin, department, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -99,11 +116,16 @@ export default function Layout() {
     const map: Record<string, string> = {
       '': 'Dashboard',
       inbound: 'Inbound',
+      asn: 'ASN',
       outbound: 'Outbound',
       stock: 'Stock',
       ledger: 'Stock Ledger',
+      picklist: 'Picklist',
+      waves: 'Wave Planning',
       stocktake: 'Stock Take',
+      'cycle-count': 'Cycle Count',
       'bin-transfer': 'Bin Transfer',
+      replenishment: 'Replenishment',
       products: 'Products',
       customers: 'Customers',
       locations: 'Locations',
@@ -151,15 +173,18 @@ export default function Layout() {
 
         <nav className="px-2 py-3 flex-1 flex flex-col gap-0.5">
           {NAV.map((section) => {
-            const visibleItems = section.writeOnly
+            const deptAllowed = !section.depts || section.depts.includes(department);
+            const sectionVisible = section.writeOnly
               ? canWrite
-                ? section.items
-                : []
+                ? deptAllowed
+                : false
               : section.adminOnly
-                ? canAdmin
-                  ? section.items
-                  : []
-                : section.items;
+                ? canAdmin && deptAllowed
+                : deptAllowed;
+            if (!sectionVisible) return null;
+            const visibleItems = section.items.filter(
+              (item) => !item.depts || item.depts.includes(department),
+            );
             if (!visibleItems.length) return null;
             return (
               <div key={section.section}>
@@ -219,6 +244,11 @@ export default function Layout() {
               <span className="text-[10px] font-bold text-brand-600 bg-brand-100 px-2 py-0.5 rounded-full uppercase">
                 {roleLabel(user?.role || '')}
               </span>
+              {department !== 'all' && (
+                <span className="text-[10px] font-bold text-teal-700 bg-teal-100 px-2 py-0.5 rounded-full uppercase">
+                  {department}
+                </span>
+              )}
             </div>
             <button
               onClick={handleLogout}

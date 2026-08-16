@@ -13,6 +13,7 @@ interface UserRow {
   full_name: string;
   email: string;
   role: string;
+  department: string;
   is_active: boolean | number;
 }
 
@@ -67,6 +68,7 @@ export class AuthActions {
         full_name: user.full_name,
         email: user.email,
         role: user.role,
+        department: user.department ?? 'all',
       },
     };
   }

@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 import { InboundService } from './inbound.service';
 import { ActivityLogger } from '../common/activity-logger';
-import { registerActions, RequestContext, setPermission } from '../dispatcher/registry';
+import { registerActions, RequestContext, setPermission, setModuleDepartments, setActionDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 import { MasterDataService } from '../master/master-data.service';
 
@@ -38,6 +38,8 @@ export class InboundActions {
       repair_ledger: (c) => this.repairLedger(c),
     });
     setPermission('inbound', 'delete', 'write');
+    setModuleDepartments('inbound', ['inbound']);
+    setActionDepartments('inbound', 'search_products', ['inbound', 'inventory']);
   }
 
   private actCtx(ctx: RequestContext) {
@@ -72,6 +74,14 @@ export class InboundActions {
       it.pallet_locations = locs;
       it.id = Number(it.id);
     }
+    const crossDockOrders = await this.db.query(
+      `SELECT o.id, o.order_number, o.so_number, o.do_number, c.customer_name,
+              COALESCE(o.so_number, o.do_number, o.order_number) AS display_no
+       FROM outbound_orders o
+       LEFT JOIN customers c ON o.customer_id = c.id
+       WHERE o.status IN ('Open','Picking','Picked')
+       ORDER BY o.order_number`,
+    );
     return {
       order,
       items,
@@ -79,6 +89,7 @@ export class InboundActions {
       item_pallet_counts: itemPalletCounts,
       users: await this.master.activeUsers(),
       products: await this.master.productOptions(),
+      cross_dock_orders: crossDockOrders.rows,
     };
   }
 
@@ -215,7 +226,7 @@ export class InboundActions {
     const newProcess = String(data.status ?? '').trim();
     const allowed = ['Dues In', 'Goods Received', 'Unserviceable', 'ATP'];
     if (!allowed.includes(newProcess)) throw ApiException.badRequest('Status tidak valid.');
-    await this.inbound.changeItemStatus(itemId, newProcess);
+    await this.inbound.changeItemStatus(itemId, newProcess, ctx.user.id);
     await this.activity.log(
       'UPDATE_ITEM_STATUS', 'inbound', 'Inbound', inboundId, null,
       `Status item ID ${itemId} → ${newProcess}`, null, null, this.actCtx(ctx),

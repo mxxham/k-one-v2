@@ -1,12 +1,13 @@
 import { createContext, useContext, useCallback, useMemo, useState, ReactNode } from 'react';
-import { User, getStoredUser, setSession, clearSession, loginApi, logoutApi, api, getToken } from '@/lib/api';
+import { User, Department, getStoredUser, setSession, clearSession, loginApi, logoutApi, api, getToken } from '@/lib/api';
 
 interface AuthContextValue {
   user: User | null;
   isAuthenticated: boolean;
   canWrite: boolean;
   canAdmin: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  department: Department;
+  login: (username: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -19,6 +20,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const u = await loginApi(username, password);
     setUser(u);
+    return u;
   }, []);
 
   const logout = useCallback(async () => {
@@ -40,15 +42,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({
-      user,
-      isAuthenticated: !!user,
-      canWrite: !!user && ['admin', 'operator', 'warehouse', 'supervisor', 'staff'].includes(user.role),
-      canAdmin: !!user && user.role === 'admin',
-      login,
-      logout,
-      refreshUser,
-    }),
+    () => {
+      const department = (['inbound', 'outbound', 'inventory', 'all'].includes(user?.department ?? '') ? user!.department : 'all') as Department;
+      return {
+        user,
+        isAuthenticated: !!user,
+        canWrite: !!user && ['admin', 'operator', 'warehouse', 'supervisor', 'staff'].includes(user.role),
+        canAdmin: !!user && user.role === 'admin',
+        department,
+        login,
+        logout,
+        refreshUser,
+      };
+    },
     [user, login, logout, refreshUser],
   );
 

@@ -2,12 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Warehouse, Droplets, Boxes, Timer, AlertTriangle, ArrowDownToLine,
-<<<<<<< HEAD
-  PackageOpen, Truck, MapPin,
-=======
   PackageOpen, Truck, MapPin, Plus, FileText, ClipboardCheck, TrendingUp, TrendingDown,
   BarChart3, RefreshCw,
->>>>>>> 3493489 ( KOV better inbound)
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
@@ -15,15 +11,11 @@ import { Card, EmptyState } from '@/components/Card';
 import Modal from '@/components/Modal';
 import Spinner from '@/components/Spinner';
 import StatusBadge from '@/components/StatusBadge';
-<<<<<<< HEAD
-import { fmtNum, fmtDate, expiryInfo } from '@/lib/format';
-=======
 
 import { fmtNum, fmtDate, fmtDateTime, expiryInfo } from '@/lib/format';
 import DashboardAlerts from '@/components/dashboard/DashboardAlerts';
 import FefoPriorityQueue from '@/components/dashboard/FefoPriorityQueue';
 import SmartInsights from '@/components/dashboard/SmartInsights';
->>>>>>> 3493489 ( KOV better inbound)
 
 function greeting(name: string) {
   const h = new Date().getHours();
@@ -138,21 +130,15 @@ export default function Dashboard() {
 
   const kpi = data?.kpi || {};
   const pipeline = (kpi.dues_in || 0) + (kpi.receiving_now || 0);
-  const expiredDetail = data?.expired_detail || [];
   const stockSummary = data?.stock_summary || [];
   const monthly = data?.monthly_activity || [];
   const stockByLocation = data?.stock_by_location || [];
   const pendingInbound = data?.pending_inbound || [];
   const pendingOutbound = data?.pending_outbound || [];
 
-  const kpiCards = [
-    { label: 'Total Drums', value: kpi.total_drums, icon: Droplets, grad: 'from-brand-500 to-brand-300' },
-    { label: 'Total Pallets', value: kpi.total_pallets, icon: Boxes, grad: 'from-[#0d1f1f] to-brand-700' },
-    { label: 'Expiring Soon', value: kpi.expiring_soon, icon: Timer, grad: 'from-amber-500 to-orange-400' },
-    { label: 'Expired Items', value: kpi.expired_items, icon: AlertTriangle, grad: 'from-red-500 to-red-400' },
-    { label: 'Dues In / Receiving', value: pipeline, icon: ArrowDownToLine, grad: 'from-sky-600 to-sky-400' },
-    { label: 'Pending Outbound', value: kpi.pending_outbound, icon: PackageOpen, grad: 'from-violet-600 to-violet-400' },
-  ];
+  // Calculate location utilization percentage
+  const locationUtil =
+    kpi.total_locations > 0 ? Math.round((kpi.occupied_locations / kpi.total_locations) * 100) : 0;
 
   const maxQty = Math.max(
     1,
@@ -164,7 +150,7 @@ export default function Dashboard() {
 
   return (
     <div>
-      {/* Hero banner */}
+      {/* Hero banner with quick actions */}
       <div className="rounded-xl p-6 mb-5 text-white bg-gradient-to-br from-[#0d1f1f] via-brand-800 to-brand-600 shadow-lg flex items-center justify-between gap-4 flex-wrap overflow-hidden relative">
         <div className="absolute -right-10 -top-10 w-44 h-44 rounded-full bg-brand-400/20 blur-2xl pointer-events-none" />
         <div className="relative">
@@ -176,11 +162,28 @@ export default function Dashboard() {
             {now.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </p>
         </div>
-        <div className="relative text-right">
-          <div className="text-4xl font-extrabold tabular-nums leading-none">
-            {now.toLocaleTimeString('en-GB', { hour12: false })}
+        <div className="relative flex items-center gap-3">
+          <div className="text-right mr-4">
+            <div className="text-4xl font-extrabold tabular-nums leading-none">
+              {now.toLocaleTimeString('en-GB', { hour12: false })}
+            </div>
+            <div className="text-[11px] text-white/70 uppercase tracking-widest mt-1.5">Live Clock</div>
           </div>
-          <div className="text-[11px] text-white/70 uppercase tracking-widest mt-1.5">Live Clock</div>
+          {/* Quick Actions */}
+          <Link
+            to="/inbound/new"
+            className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-semibold transition backdrop-blur-sm border border-white/20"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">New Inbound</span>
+          </Link>
+          <Link
+            to="/outbound/new"
+            className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-semibold transition backdrop-blur-sm border border-white/20"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">New Outbound</span>
+          </Link>
         </div>
       </div>
 
@@ -190,51 +193,98 @@ export default function Dashboard() {
         <div className="mb-5 px-4 py-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">{error}</div>
       ) : (
         <>
-          {/* KPI grid */}
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-5">
-            {kpiCards.map((k) => (
-              <div key={k.label} className={`rounded-xl bg-gradient-to-br ${k.grad} p-4 text-white shadow-sm`}>
-                <k.icon className="w-4 h-4 opacity-80" />
-                <div className="text-2xl font-extrabold mt-2">{fmtNum(k.value, 0)}</div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">{k.label}</div>
+          {/* Critical Alerts Banner */}
+          <DashboardAlerts />
+
+          {/* KPI Cards - Row 1: Inventory Health */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+            {/* Total Drums with Trend */}
+            <div className="rounded-xl bg-gradient-to-br from-brand-500 to-brand-300 p-4 text-white shadow-sm">
+              <div className="flex items-center justify-between">
+                <Droplets className="w-5 h-5 opacity-80" />
+                {kpi.total_drums_trend !== undefined && (
+                  <div className={`flex items-center gap-1 text-xs font-semibold ${kpi.total_drums_trend >= 0 ? 'text-white/90' : 'text-white/90'}`}>
+                    {kpi.total_drums_trend >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                    {Math.abs(kpi.total_drums_trend).toFixed(1)}%
+                  </div>
+                )}
               </div>
-            ))}
+              <div className="text-2xl font-extrabold mt-2">{fmtNum(kpi.total_drums, 0)}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Total Drums</div>
+            </div>
+            
+            {/* Total Pallets */}
+            <div className="rounded-xl bg-gradient-to-br from-[#0d1f1f] to-brand-700 p-4 text-white shadow-sm">
+              <Boxes className="w-5 h-5 opacity-80" />
+              <div className="text-2xl font-extrabold mt-2">{fmtNum(kpi.total_pallets, 0)}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Total Pallets</div>
+              {kpi.total_pallets_utilization > 0 && (
+                <div className="text-xs opacity-75 mt-1">{kpi.total_pallets_utilization}% capacity</div>
+              )}
+            </div>
+
+            {/* Location Utilization */}
+            <div className="rounded-xl bg-gradient-to-br from-purple-600 to-purple-400 p-4 text-white shadow-sm">
+              <MapPin className="w-5 h-5 opacity-80" />
+              <div className="text-2xl font-extrabold mt-2">
+                {kpi.total_locations > 0 ? Math.round((kpi.occupied_locations / kpi.total_locations) * 100) : 0}%
+              </div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Location Utilization</div>
+              <div className="text-xs opacity-75 mt-1">{kpi.occupied_locations || 0}/{kpi.total_locations || 0} occupied</div>
+            </div>
+
+            {/* Aging Inventory */}
+            <div className="rounded-xl bg-gradient-to-br from-amber-600 to-amber-400 p-4 text-white shadow-sm">
+              <Timer className="w-5 h-5 opacity-80" />
+              <div className="text-2xl font-extrabold mt-2">{fmtNum(kpi.aging_batch_count || 0, 0)}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Aging Inventory</div>
+              <div className="text-xs opacity-75 mt-1">{fmtNum(kpi.aging_quantity || 0, 0)} units, 90+ days</div>
+            </div>
           </div>
 
-          {/* Expired alert strip */}
-          {expiredDetail.length > 0 && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-4 mb-5 overflow-hidden">
-              <div className="flex items-center gap-2 text-red-700 font-bold text-sm mb-3">
-                <AlertTriangle className="w-4 h-4" /> Expired Items Ditemukan
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-red-100/60">
-                    <tr className="text-left text-[11px] uppercase tracking-wide text-red-800">
-                      <th className={TH}>Kode</th>
-                      <th className={TH}>Produk</th>
-                      <th className={TH}>Batch</th>
-                      <th className={TH}>Expiry</th>
-                      <th className={TH}>Qty</th>
-                      <th className={TH}>Pallet</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-red-100">
-                    {expiredDetail.map((r: any, i: number) => (
-                      <tr key={r.id || `${r.product_code}-${i}`} className="hover:bg-red-50 transition-colors">
-                        <td className={`${TD} font-semibold`}>{r.product_code}</td>
-                        <td className={TD}>{r.product_name}</td>
-                        <td className={TD}>{r.batch_number || '—'}</td>
-                        <td className={`${TD} text-red-600 font-semibold`}>{expiryCell(r.expiry_date)}</td>
-                        <td className={TD}>{fmtNum(r.qty, 0)}</td>
-                        <td className={TD}>{fmtNum(r.pallet, 0)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          {/* KPI Cards - Row 2: Today's Operations */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+            {/* Inbound Pipeline */}
+            <div className="rounded-xl bg-gradient-to-br from-sky-600 to-sky-400 p-4 text-white shadow-sm">
+              <ArrowDownToLine className="w-5 h-5 opacity-80" />
+              <div className="text-2xl font-extrabold mt-2">{pipeline}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Inbound Pipeline</div>
+              <div className="text-xs opacity-75 mt-1">{kpi.receiving_now || 0} receiving</div>
             </div>
-          )}
+
+            {/* Pending Picks */}
+            <div className="rounded-xl bg-gradient-to-br from-violet-600 to-violet-400 p-4 text-white shadow-sm">
+              <PackageOpen className="w-5 h-5 opacity-80" />
+              <div className="text-2xl font-extrabold mt-2">{fmtNum(kpi.pending_outbound || 0, 0)}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Pending Picks</div>
+            </div>
+
+            {/* Shipped Today */}
+            <div className="rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 p-4 text-white shadow-sm">
+              <Truck className="w-5 h-5 opacity-80" />
+              <div className="text-2xl font-extrabold mt-2">{fmtNum(kpi.shipped_today_orders || 0, 0)}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Shipped Today</div>
+              <div className="text-xs opacity-75 mt-1">{fmtNum(kpi.shipped_today_quantity || 0, 0)} units</div>
+            </div>
+
+            {/* Pick Accuracy */}
+            <div className={`rounded-xl bg-gradient-to-br ${kpi.pick_accuracy_percent >= 95 ? 'from-emerald-600 to-emerald-400' : 'from-orange-600 to-orange-400'} p-4 text-white shadow-sm`}>
+              <Warehouse className="w-5 h-5 opacity-80" />
+              <div className="text-2xl font-extrabold mt-2">{kpi.pick_accuracy_percent || 100}%</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-85 mt-0.5">Pick Accuracy</div>
+              <div className="text-xs opacity-75 mt-1">{kpi.pick_accurate_lines || 0}/{kpi.pick_total_lines || 0} lines</div>
+            </div>
+          </div>
+
+          {/* FEFO Priority Queue */}
+          <div className="mb-5">
+            <FefoPriorityQueue limit={10} />
+          </div>
+
+          {/* Smart Insights */}
+          <div className="mb-5">
+            <SmartInsights />
+          </div>
 
           {/* Work queues */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
@@ -612,7 +662,7 @@ export default function Dashboard() {
                         key={l.code || l.id}
                         className={`${l.is_partial || l.is_eceran ? 'bg-amber-50/70 hover:bg-amber-100/70' : 'hover:bg-brand-50'} transition-colors`}
                       >
-                        <td className={`${TD} font-semibold`}>{l.code}</td>
+                        <td className={`${TD} font-mono text-xs font-semibold`}>{l.code || '—'}</td>
                         <td className={TD}>{l.rack || '—'}</td>
                         <td className={TD}>{l.row_name || '—'}</td>
                         <td className={TD}>{l.zone || '—'}</td>

@@ -7,9 +7,10 @@ import { OutboundModule } from '../outbound/outbound.module';
 import { PicklistModule } from '../picklist/picklist.module';
 import { ReportModule } from '../report/report.module';
 import { StockTakeModule } from '../stocktake/stocktake.module';
+import { AsnModule } from '../asn/asn.module';
 
 @Module({
-  imports: [InboundModule, OutboundModule, PicklistModule, ReportModule, StockTakeModule],
+  imports: [InboundModule, OutboundModule, PicklistModule, ReportModule, StockTakeModule, AsnModule],
   providers: [ExcelExportService, PrintService, ExportActions],
 })
 export class ExportModule {}

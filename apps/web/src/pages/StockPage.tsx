@@ -13,6 +13,8 @@ import {
   Lock,
   Clock,
   FileSpreadsheet,
+  ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react';
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
@@ -36,6 +38,7 @@ interface StockRow {
   category: string;
   uom_type: string;
   uom_per_pallet: number;
+  velocity_class: string | null;
   batch_number: string;
   location: string;
   quantity: number;
@@ -44,6 +47,10 @@ interface StockRow {
   manufacture_date: string;
   expiry_date: string;
   stock_status: string;
+  hold_status: string;
+  hold_reason: string;
+  hold_by: number | null;
+  hold_at: string | null;
 }
 
 interface StockSummary {
@@ -81,6 +88,7 @@ export default function StockPage() {
   const [qApplied, setQApplied] = useState(() => searchParams.get('q') || '');
   const [status, setStatus] = useState('');
   const [location, setLocation] = useState('');
+  const [year, setYear] = useState(() => searchParams.get('year') || '');
   const [expiring, setExpiring] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -90,13 +98,18 @@ export default function StockPage() {
   const [adjustRow, setAdjustRow] = useState<StockRow | null>(null);
   const [adjQty, setAdjQty] = useState('');
   const [adjReason, setAdjReason] = useState('');
+  const [holdRow, setHoldRow] = useState<StockRow | null>(null);
+  const [holdStatus, setHoldStatus] = useState('on_hold');
+  const [holdReason, setHoldReason] = useState('');
+  const [releaseRow, setReleaseRow] = useState<StockRow | null>(null);
+  const [releaseReason, setReleaseReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const loadList = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api('stock', 'list', {
-        params: { status, q: qApplied, location, expiring: expiring ? '1' : undefined },
+        params: { status, q: qApplied, location, year: year || undefined, expiring: expiring ? '1' : undefined },
       });
       setRows((res.rows || []) as StockRow[]);
       if (res.summary) setSummary(res.summary as StockSummary);
@@ -105,7 +118,7 @@ export default function StockPage() {
     } finally {
       setLoading(false);
     }
-  }, [status, qApplied, location, expiring, toast]);
+  }, [status, qApplied, location, year, expiring, toast]);
 
   useEffect(() => {
     loadList();
@@ -160,6 +173,17 @@ export default function StockPage() {
     setAdjReason('');
   };
 
+  const openHold = (r: StockRow) => {
+    setHoldRow(r);
+    setHoldStatus('on_hold');
+    setHoldReason('');
+  };
+
+  const openRelease = (r: StockRow) => {
+    setReleaseRow(r);
+    setReleaseReason('');
+  };
+
   const submitTransfer = async (e: FormEvent) => {
     e.preventDefault();
     if (!transferRow) return;
@@ -197,6 +221,48 @@ export default function StockPage() {
       reload();
     } catch (err: any) {
       toast('error', err.message || 'Adjustment stok gagal');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitHold = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!holdRow) return;
+    if (!holdReason.trim()) {
+      toast('error', 'Alasan hold wajib diisi');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api('stock', 'hold', {
+        method: 'POST',
+        body: { stock_id: holdRow.id, status: holdStatus, reason: holdReason.trim() },
+      });
+      toast('success', 'Stok di-hold');
+      setHoldRow(null);
+      reload();
+    } catch (err: any) {
+      toast('error', err.message || 'Hold stok gagal');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitRelease = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!releaseRow) return;
+    setSubmitting(true);
+    try {
+      await api('stock', 'release', {
+        method: 'POST',
+        body: { stock_id: releaseRow.id, reason: releaseReason.trim() },
+      });
+      toast('success', 'Stok di-release');
+      setReleaseRow(null);
+      reload();
+    } catch (err: any) {
+      toast('error', err.message || 'Release stok gagal');
     } finally {
       setSubmitting(false);
     }
@@ -306,6 +372,19 @@ export default function StockPage() {
             />
             Hanya segera expire
           </label>
+          {year && (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-sm font-semibold text-red-700">
+              Expire {year}
+              <button
+                type="button"
+                onClick={() => setYear('')}
+                className="w-4 h-4 rounded-full hover:bg-red-200 flex items-center justify-center text-xs"
+                title="Hapus filter tahun"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <button
             type="submit"
             className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 inline-flex items-center gap-2"
@@ -331,6 +410,7 @@ export default function StockPage() {
                   <th className="px-3 py-2.5 text-left font-bold">Produk</th>
                   <th className="px-3 py-2.5 text-left font-bold">Kategori</th>
                   <th className="px-3 py-2.5 text-left font-bold">UOM Type</th>
+                  <th className="px-3 py-2.5 text-center font-bold">Velocity</th>
                   <th className="px-3 py-2.5 text-left font-bold">Batch</th>
                   <th className="px-3 py-2.5 text-left font-bold">Lokasi</th>
                   <th className="px-3 py-2.5 text-right font-bold">Qty</th>
@@ -339,6 +419,7 @@ export default function StockPage() {
                   <th className="px-3 py-2.5 text-left font-bold">Tgl Produksi</th>
                   <th className="px-3 py-2.5 text-left font-bold">Expire</th>
                   <th className="px-3 py-2.5 text-left font-bold">Status</th>
+                  <th className="px-3 py-2.5 text-left font-bold">Hold</th>
                   <th className="px-3 py-2.5 text-right font-bold">Aksi</th>
                 </tr>
               </thead>
@@ -353,8 +434,17 @@ export default function StockPage() {
                       </td>
                       <td className="px-3 py-2.5 text-gray-600">{r.category || '—'}</td>
                       <td className="px-3 py-2.5 text-gray-600">{r.uom_type || '—'}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        {r.velocity_class ? (
+                          <StatusBadge status={r.velocity_class} />
+                        ) : (
+                          <span className="text-[11px] text-gray-400">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2.5 text-gray-600">{r.batch_number || '—'}</td>
-                      <td className="px-3 py-2.5 text-gray-700">{r.location || '—'}</td>
+                      <td className="px-3 py-2.5 text-gray-700 font-mono text-xs">
+                        {r.location || '—'}
+                      </td>
                       <td className="px-3 py-2.5 text-right font-semibold">{fmtNum(r.quantity, 0)}</td>
                       <td className="px-3 py-2.5 text-gray-600">{r.uom || '—'}</td>
                       <td className="px-3 py-2.5 text-right">{fmtNum(r.pallet, 0)}</td>
@@ -367,7 +457,35 @@ export default function StockPage() {
                         <StatusBadge status={r.stock_status} />
                       </td>
                       <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <StatusBadge status={r.hold_status || 'available'} />
+                          {r.hold_status && r.hold_status !== 'available' && (
+                            <span className="text-[10px] text-gray-400" title={r.hold_reason || ''}>
+                              {r.hold_reason ? `: ${r.hold_reason}` : ''}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5">
                         <div className="flex items-center justify-end gap-1.5">
+                          {canWrite && (r.hold_status === 'available' || !r.hold_status) && (
+                            <button
+                              onClick={() => openHold(r)}
+                              title="Hold / Quarantine"
+                              className="p-1.5 rounded-lg bg-orange-50 text-orange-600 hover:bg-orange-100"
+                            >
+                              <ShieldAlert className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {canWrite && r.hold_status && r.hold_status !== 'available' && (
+                            <button
+                              onClick={() => openRelease(r)}
+                              title="Release Hold"
+                              className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           {canWrite && (
                             <button
                               onClick={() => openTransfer(r)}
@@ -530,6 +648,111 @@ export default function StockPage() {
                 className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 disabled:opacity-50"
               >
                 {submitting ? 'Menyimpan…' : 'Simpan'}
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      <Modal open={!!holdRow} onClose={() => setHoldRow(null)} title="Hold / Quarantine Stok" size="sm">
+        {holdRow && (
+          <form onSubmit={submitHold} className="space-y-4">
+            <div className="bg-orange-50 rounded-lg p-3 text-xs text-orange-800">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Produk</span>
+                <span className="font-semibold">
+                  {holdRow.product_code} — {holdRow.product_name}
+                </span>
+              </div>
+              <div className="flex justify-between mt-1">
+                <span className="text-gray-500">Batch · Lokasi</span>
+                <span className="font-semibold">
+                  {holdRow.batch_number || '—'} · {holdRow.location}
+                </span>
+              </div>
+              <div className="flex justify-between mt-1">
+                <span className="text-gray-500">Qty</span>
+                <span className="font-semibold">
+                  {fmtNum(holdRow.quantity, 0)} {holdRow.uom}
+                </span>
+              </div>
+            </div>
+            <Field label="Status Hold" required>
+              <Select value={holdStatus} onChange={(e) => setHoldStatus(e.target.value)}>
+                <option value="on_hold">On Hold</option>
+                <option value="quarantine">Quarantine</option>
+                <option value="damaged">Damaged</option>
+              </Select>
+            </Field>
+            <Field label="Alasan" required>
+              <TextArea value={holdReason} onChange={(e) => setHoldReason(e.target.value)} rows={3} placeholder="Alasan hold / quarantine…" autoFocus />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setHoldRow(null)}
+                className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                disabled={submitting || !holdReason.trim()}
+                className="px-4 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 disabled:opacity-50"
+              >
+                {submitting ? 'Menyimpan…' : 'Hold'}
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      <Modal open={!!releaseRow} onClose={() => setReleaseRow(null)} title="Release Hold Stok" size="sm">
+        {releaseRow && (
+          <form onSubmit={submitRelease} className="space-y-4">
+            <div className="bg-emerald-50 rounded-lg p-3 text-xs text-emerald-800">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Produk</span>
+                <span className="font-semibold">
+                  {releaseRow.product_code} — {releaseRow.product_name}
+                </span>
+              </div>
+              <div className="flex justify-between mt-1">
+                <span className="text-gray-500">Batch · Lokasi</span>
+                <span className="font-semibold">
+                  {releaseRow.batch_number || '—'} · {releaseRow.location}
+                </span>
+              </div>
+              <div className="flex justify-between mt-1">
+                <span className="text-gray-500">Status hold</span>
+                <span className="font-semibold">
+                  <StatusBadge status={releaseRow.hold_status} />
+                </span>
+              </div>
+              {releaseRow.hold_reason && (
+                <div className="mt-1">
+                  <span className="text-gray-500">Alasan hold: </span>
+                  <span className="font-semibold">{releaseRow.hold_reason}</span>
+                </div>
+              )}
+            </div>
+            <Field label="Alasan Release" hint="Opsional">
+              <TextArea value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} rows={3} placeholder="Alasan release…" autoFocus />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setReleaseRow(null)}
+                className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {submitting ? 'Menyimpan…' : 'Release'}
               </button>
             </div>
           </form>

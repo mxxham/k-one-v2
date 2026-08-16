@@ -2,9 +2,10 @@ import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Warehouse, Lock, User, AlertCircle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { departmentHome } from '@/lib/api';
 
 export default function Login() {
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, department } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
@@ -12,7 +13,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   if (isAuthenticated) {
-    navigate('/');
+    navigate(departmentHome(department), { replace: true });
   }
 
   const handleSubmit = async (e: FormEvent) => {
@@ -20,8 +21,8 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      await login(username, password);
-      navigate('/');
+      const u = await login(username, password);
+      navigate(departmentHome(u?.department), { replace: true });
     } catch (err: any) {
       setError(err.message || 'Login gagal');
     } finally {

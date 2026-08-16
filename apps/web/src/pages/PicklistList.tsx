@@ -19,6 +19,8 @@ interface PicklistRow {
   picklist_number?: string;
   outbound_order_id?: number | null;
   outbound_number?: string | null;
+  wave_id?: number | null;
+  wave_number?: string | null;
   created_date?: string;
   status?: string;
   notes?: string;
@@ -178,7 +180,11 @@ export default function PicklistList() {
                         </Link>
                       </td>
                       <td className="px-4 py-3 border-t border-gray-100 text-sm text-gray-700">
-                        {row.outbound_order_id ? (
+                        {row.wave_id ? (
+                          <Link to={`/waves`} className="text-brand-600 hover:underline">
+                            {row.wave_number || `Wave #${row.wave_id}`}
+                          </Link>
+                        ) : row.outbound_order_id ? (
                           <Link to={`/outbound/${row.outbound_order_id}`} className="text-brand-600 hover:underline">
                             {row.outbound_number || `#${row.outbound_order_id}`}
                           </Link>

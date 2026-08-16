@@ -1,22 +1,20 @@
 ﻿import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-<<<<<<< HEAD
-import { ArrowLeft, Plus, Trash2, Edit3, CalendarDays, Boxes, MapPin, Layers, ChevronRight, Printer, ClipboardList } from 'lucide-react';
-=======
 import { ArrowLeft, Plus, Trash2, Edit3, CalendarDays, Boxes, MapPin, Layers, ChevronRight, Printer, ClipboardList, AlertTriangle, Sparkles } from 'lucide-react';
->>>>>>> 3493489 ( KOV better inbound)
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
 import { fmtDate, fmtNum, todayISO } from '@/lib/format';
 import { PageHeader } from '@/components/PageHeader';
 import { Card, EmptyState } from '@/components/Card';
 import StatusBadge from '@/components/StatusBadge';
+
 import Modal from '@/components/Modal';
 import Spinner from '@/components/Spinner';
 import ConfirmButton from '@/components/ConfirmButton';
 import { Field, TextInput, Select, Grid } from '@/components/Field';
 import { useToast } from '@/components/Toast';
 import { useAuth } from '@/context/AuthContext';
+import ScanInput from '@/components/ScanInput';
 
 const ITEM_STATUSES = ['Dues In', 'Goods Received', 'Unserviceable', 'ATP'];
 const WORKFLOW_STEPS = ['Draft', 'Dues In', 'Receiving', 'Goods Received', 'ATP', 'Completed'];
@@ -78,6 +76,9 @@ interface ItemDetail {
   in_process_status?: string;
   notes?: string;
   pallet_locations?: PalletLocation[];
+  cross_dock_outbound_order_id?: number | null;
+  cross_dock_order_number?: string;
+  cross_dock_order_status?: string;
 }
 
 interface DetailUser {
@@ -94,6 +95,7 @@ interface DetailData {
   item_pallet_counts?: Record<string, number>;
   users?: DetailUser[];
   products?: any[];
+  cross_dock_orders?: any[];
 }
 
 interface SearchProduct {
@@ -118,6 +120,7 @@ interface AddItemForm {
   manufacture_date: string;
   exp_date: string;
   in_process_status: string;
+  cross_dock_outbound_order_id: number | null;
 }
 
 interface PalletRow {
@@ -287,6 +290,11 @@ export default function InboundDetail() {
   const [palletNoItem, setPalletNoItem] = useState<ItemDetail | null>(null);
   const [palletNoValue, setPalletNoValue] = useState('');
 
+  const [scanErr, setScanErr] = useState<string | null>(null);
+  const [scanCode, setScanCode] = useState('');
+  const [scanMatchId, setScanMatchId] = useState<number | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
+
   const [locItem, setLocItem] = useState<ItemDetail | null>(null);
   const [locValue, setLocValue] = useState('');
 
@@ -308,6 +316,7 @@ export default function InboundDetail() {
     manufacture_date: '',
     exp_date: '',
     in_process_status: 'Dues In',
+    cross_dock_outbound_order_id: null,
   });
   const [addLocations, setAddLocations] = useState<AddLocRow[]>([]);
   const [addSuggesting, setAddSuggesting] = useState(false);
@@ -453,9 +462,6 @@ export default function InboundDetail() {
     );
   };
 
-<<<<<<< HEAD
-  const openPalletModal = (item: ItemDetail) => {
-=======
   // Phase 2 — scanner-first putaway: validates the scanned product matches the
   // expected item (next in Dues In/Goods Received that still needs putaway).
   const putawayTarget = data?.items.find((it) => it.in_process_status === 'Dues In' || it.in_process_status === 'Goods Received') ?? null;
@@ -507,7 +513,6 @@ export default function InboundDetail() {
   };
 
   const openPalletModal = async (item: ItemDetail) => {
->>>>>>> 3493489 ( KOV better inbound)
     const existing = item.pallet_locations && item.pallet_locations.length ? item.pallet_locations : [{ pallet_seq: 1, location_code: '', quantity: 0 }];
     setPalletRows(
       existing.map((r) => ({
@@ -626,6 +631,7 @@ export default function InboundDetail() {
       manufacture_date: '',
       exp_date: '',
       in_process_status: 'Dues In',
+      cross_dock_outbound_order_id: null,
     });
     setAddLocations([{ location_code: '', quantity: '', is_full: true }]);
     setAddItemOpen(true);
@@ -655,6 +661,7 @@ export default function InboundDetail() {
               manufacture_date: addItem.manufacture_date || undefined,
               exp_date: addItem.exp_date || undefined,
               in_process_status: addItem.in_process_status,
+              cross_dock_outbound_order_id: addItem.cross_dock_outbound_order_id || undefined,
               pallet_locations: addLocations
                 .filter((r) => r.location_code.trim() && Number(r.quantity) > 0)
                 .map((r, i) => ({
@@ -848,6 +855,46 @@ const headerActions = (
           ) : undefined
         }
       >
+        {editable && (
+          <div className="px-3 pt-3">
+            <ScanInput onScan={handleScan} placeholder={`Scan SKU → validasi putaway${putawayTarget ? ` (${putawayTarget.product_code || ''})` : ''}`} disabled={busy} className="max-w-md" />
+            {putawayTarget && (
+              <div className="text-[11px] text-gray-400 mt-1">
+                Diproses: {putawayTarget.product_code || '—'} · {putawayTarget.product_name || ''} · {putawayTarget.batch_number || '—'}
+              </div>
+            )}
+            {scanErr && (
+              <div className="mt-2 rounded-lg border-[1.5px] border-red-200 bg-red-50 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                  <div className="text-sm text-red-700">{scanErr}</div>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <TextInput
+                    placeholder="Alasan override (wajib)"
+                    value={overrideReason}
+                    onChange={(ev) => setOverrideReason(ev.target.value)}
+                    className="max-w-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleOverride}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700"
+                  >
+                    Override & Lanjut
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setScanErr(null); setOverrideReason(''); }}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {data.items.length === 0 ? (
           <EmptyState message="Belum ada item" />
         ) : (
@@ -873,68 +920,6 @@ const headerActions = (
                 </tr>
               </thead>
               <tbody>
-<<<<<<< HEAD
-                {data.items.map((item) => (
-                  <tr key={item.id} className="border-t border-gray-100 hover:bg-brand-50 transition-colors">
-                    <td className="px-3 py-2.5">
-                      <div className="font-semibold text-gray-800">{item.product_code}</div>
-                      <div className="text-[11px] text-gray-500 truncate max-w-[180px]">{item.product_name || ''}</div>
-                    </td>
-                    <td className="px-3 py-2.5 text-gray-600">{item.od_number || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{item.so_number || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{item.batch_number || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{item.pallet_no || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-700 font-medium text-right">{fmtNum(item.quantity, 0)}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{item.uom || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-700 font-medium text-right">{fmtNum(item.actual_qty, 0)}</td>
-                    <td className="px-3 py-2.5 text-gray-700 font-medium text-right">{fmtNum(palletCount(item), 0)}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{item.location || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{fmtDate(item.manufacture_date)}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{fmtDate(item.exp_date)}</td>
-                    <td className="px-3 py-2.5">
-                      <ItemStatusPill status={item.in_process_status} />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <StatusBadge status={item.stock_status} />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {editable ? (
-                        <div className="flex items-center gap-1 flex-wrap justify-end">
-                          <ActionBtn title="Edit Qty" onClick={() => openEditQty(item)}>
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </ActionBtn>
-                          <ActionBtn title="Edit Dates" onClick={() => openEditDates(item)}>
-                            <CalendarDays className="w-3.5 h-3.5" />
-                          </ActionBtn>
-                          <ActionBtn title="Update Pallet No" onClick={() => openPalletNo(item)}>
-                            <Boxes className="w-3.5 h-3.5" />
-                          </ActionBtn>
-                          <ActionBtn title="Assign Location" onClick={() => openLoc(item)}>
-                            <MapPin className="w-3.5 h-3.5" />
-                          </ActionBtn>
-                          <ActionBtn title="Manage Pallet Locations" onClick={() => openPalletModal(item)}>
-                            <Layers className="w-3.5 h-3.5" />
-                          </ActionBtn>
-                          <Select
-                            value={item.in_process_status || ''}
-                            onChange={(e) => updateItemStatus(item, e.target.value)}
-                            className="!w-32 !py-1 !px-2 text-xs"
-                          >
-                            {ITEM_STATUSES.map((s) => (
-                              <option key={s} value={s}>
-                                {s}
-                              </option>
-                            ))}
-                          </Select>
-                          <ConfirmButton label="Delete" confirmText="Hapus item ini?" onConfirm={() => deleteItem(item)} />
-                        </div>
-                      ) : (
-                        <span className="text-[11px] text-gray-400">View only</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-=======
                 {displayRows.map((row) => {
                   const item = row.item;
                   const pallet = row.pallet;
@@ -1012,7 +997,6 @@ const headerActions = (
                     </tr>
                   );
                 })}
->>>>>>> 3493489 ( KOV better inbound)
               </tbody>
             </table>
           </div>
@@ -1267,6 +1251,23 @@ const headerActions = (
               <TextInput type="date" value={addItem.exp_date} onChange={(e) => setAddItem((f) => ({ ...f, exp_date: e.target.value }))} />
             </Field>
           </Grid>
+
+          <Field
+            label="Cross-dock ke Outbound Order"
+            hint={addItem.cross_dock_outbound_order_id ? 'Item ini TIDAK melalui putaway normal — langsung distage di STAGING untuk outbound tsb.' : 'Opsional. Item akan dilewati dari FEFO/putaway biasa.'}
+          >
+            <Select
+              value={addItem.cross_dock_outbound_order_id ? String(addItem.cross_dock_outbound_order_id) : ''}
+              onChange={(e) => setAddItem((f) => ({ ...f, cross_dock_outbound_order_id: e.target.value ? Number(e.target.value) : null }))}
+            >
+              <option value="">Tidak cross-dock (putaway normal)</option>
+              {(data.cross_dock_orders || []).map((o: any) => (
+                <option key={o.id} value={o.id}>
+                  {o.order_number} · {o.display_no || o.so_number || o.do_number} · {o.customer_name || ''}
+                </option>
+              ))}
+            </Select>
+          </Field>
 
           <div>
             <h4 className="text-sm font-bold text-gray-700 mb-2">Pallet Locations</h4>

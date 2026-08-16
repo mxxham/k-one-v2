@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { Search, RefreshCw, ArrowDownToLine, ArrowUpFromLine, FileSpreadsheet } from 'lucide-react';
 import { PageHeader } from '@/components/PageHeader';
 import { Card, EmptyState } from '@/components/Card';
+
 import Spinner from '@/components/Spinner';
 import ConfirmButton from '@/components/ConfirmButton';
 import { Field, TextInput, Select } from '@/components/Field';
@@ -251,7 +252,7 @@ export default function LedgerPage() {
                     </td>
                     <td className="px-3 py-2.5 text-gray-600">{r.uom || '—'}</td>
                     <td className="px-3 py-2.5 text-right font-semibold">{fmtNum(r.balance, 0)}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{r.location || '—'}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-gray-700">{r.location || '—'}</td>
                     <td className="px-3 py-2.5 text-gray-500 max-w-[160px] truncate" title={r.notes || ''}>
                       {r.notes || '—'}
                     </td>

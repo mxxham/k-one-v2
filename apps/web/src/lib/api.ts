@@ -4,6 +4,30 @@ export interface User {
   full_name: string;
   email: string;
   role: string;
+  department?: string;
+}
+
+export type Department = 'inbound' | 'outbound' | 'inventory' | 'all';
+
+export const DEPARTMENTS: Array<{ key: Department; label: string }> = [
+  { key: 'inbound', label: 'Inbound' },
+  { key: 'outbound', label: 'Outbound' },
+  { key: 'inventory', label: 'Inventory' },
+  { key: 'all', label: 'Semua Departemen (Supervisor)' },
+];
+
+/** Home route per department; 'all' (supervisor/admin) gets the combined dashboard. */
+export function departmentHome(department?: string): string {
+  switch (department) {
+    case 'inbound':
+      return '/dashboard/inbound';
+    case 'outbound':
+      return '/dashboard/outbound';
+    case 'inventory':
+      return '/dashboard/inventory';
+    default:
+      return '/dashboard';
+  }
 }
 
 export interface ApiResult<T = any> {
@@ -92,8 +116,12 @@ export async function api<T = any>(module: string, action: string, opts: Request
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
+  // A body implies a mutation — fetch rejects GET/HEAD with a body, so any
+  // call site that passes body without an explicit method is treated as POST.
+  const useMethod = body !== undefined && method === 'GET' ? 'POST' : method;
+
   const res = await fetch(`${BASE}/index.php?${query.toString()}`, {
-    method,
+    method: useMethod,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal: opts.signal,

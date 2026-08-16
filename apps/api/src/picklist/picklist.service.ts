@@ -57,78 +57,176 @@ export class PicklistService {
       );
       const picklistId = Number(insR.rows[0].id);
 
-      const itemsR = await client.query(
-        `SELECT oi.*, p.product_code, p.product_name, p.uom_type, p.uom_per_pallet
-         FROM outbound_items oi
-         JOIN products p ON oi.product_id = p.id
-         WHERE oi.outbound_order_id = $1
-         ORDER BY oi.exp_date ASC, oi.id ASC`,
-        [outboundId],
-      );
-
-      for (const item of itemsR.rows) {
-        const batchNumber = item.batch_number ?? item.batch_no ?? null;
-        const uomPerPallet = Math.max(1, Number.parseInt(item.uom_per_pallet ?? '4', 10) || 4);
-
-        const locR = await client.query(
-          `SELECT sl.*, oil.quantity as alloc_qty, lm.zone, lm.aisle
-           FROM outbound_item_locations oil
-           JOIN stock_locations sl ON oil.stock_location_id = sl.id
-           LEFT JOIN location_master lm ON lm.location_code = sl.location_code
-           WHERE oil.outbound_item_id = $1
-           ORDER BY sl.location_code, sl.pallet_seq`,
-          [item.id],
-        );
-        const locationRows = locR.rows;
-
-        if (locationRows.length > 0) {
-          let palletSeq = 1;
-          for (const lr of locationRows) {
-            const locBatch = lr.batch_number ?? batchNumber;
-            const locCode = lr.location_code ?? '';
-            const qty = Number(lr.alloc_qty ?? 0);
-            const plt = calcPalletByLocation(qty, uomPerPallet, locCode);
-            await client.query(
-              `INSERT INTO picklist_items
-                 (picklist_id, outbound_item_id, product_id, batch_no, batch_number,
-                  location, quantity, uom, pallet, pallet_seq, stock_location_id, status)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Pending')`,
-              [picklistId, item.id, item.product_id, locBatch, locBatch, locCode, qty, item.uom_type, plt, palletSeq++, lr.id],
-            );
-          }
-        } else {
-          const distribution = this.calculatePalletDistribution(
-            Number(item.actual_qty ?? item.quantity ?? 0),
-            uomPerPallet,
-          );
-          let palletSeq = 1;
-          for (const pallet of distribution) {
-            let slId: number | null = null;
-            if (item.location && batchNumber) {
-              const slR = await client.query(
-                `SELECT id FROM stock_locations
-                 WHERE batch_number = $1 AND location_code = $2
-                   AND status IN ('Available','Reserved') AND pallet_seq = $3 LIMIT 1`,
-                [batchNumber, item.location, palletSeq],
-              );
-              slId = slR.rows[0]?.id ?? null;
-            }
-            const locCode2 = item.location ?? 'TBD';
-            const qty2 = Number(pallet.quantity);
-            const plt2 = calcPalletByLocation(qty2, uomPerPallet, locCode2);
-            await client.query(
-              `INSERT INTO picklist_items
-                 (picklist_id, outbound_item_id, product_id, batch_no, batch_number,
-                  location, quantity, uom, pallet, pallet_seq, stock_location_id, status)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Pending')`,
-              [picklistId, item.id, item.product_id, batchNumber, batchNumber, locCode2, qty2, item.uom_type, plt2, palletSeq++, slId],
-            );
-          }
-        }
-      }
+      await this.insertPicklistItems(client, picklistId, [outboundId]);
 
       return picklistId;
     });
+  }
+
+  /**
+   * createFromOrders — Wave Planning: builds ONE consolidated picklist across
+   * multiple outbound orders (used by the waves module). Items are inserted in
+   * (exp_date, item id) order; picklist_items are later surfaced location-sorted
+   * via getItems (ORDER BY pki.location, pki.pallet_seq) for pick-path efficiency.
+   * The header sets outbound_order_id = NULL and links wave_id instead.
+   * If a transaction client is supplied it runs inside that transaction (the
+   * waves module wraps wave + orders + picklist in a single transaction);
+   * otherwise it opens its own.
+   */
+  async createFromOrders(outboundIds: number[], createdBy: number, waveId: number, client?: any): Promise<number> {
+    const run = async (c: any) => {
+      const picklistNumber = await this.generateNumber();
+      const insR = await c.query(
+        `INSERT INTO picklists (outbound_order_id, wave_id, picklist_number, created_date, status, created_by)
+         VALUES (NULL,$1,$2,$3,'Draft',$4) RETURNING id`,
+        [waveId, picklistNumber, todayStr(), createdBy],
+      );
+      const picklistId = Number(insR.rows[0].id);
+      await this.insertPicklistItems(c, picklistId, outboundIds);
+      return picklistId;
+    };
+    if (client) return run(client);
+    return this.db.transaction(run);
+  }
+
+  /**
+   * insertPicklistItems — shared by the single-order (createFromOutbound) and
+   * wave (createFromOrders) flows. Inserts one picklist_items row per allocated
+   * stock_locations row (or per decomposed pallet when no allocations exist).
+   * Touches NO stock / NO ledger.
+   */
+  private async insertPicklistItems(client: any, picklistId: number, outboundIds: number[]): Promise<void> {
+    const itemsR = await client.query(
+      `SELECT oi.*, p.product_code, p.product_name, p.uom_type, p.uom_per_pallet
+       FROM outbound_items oi
+       JOIN products p ON oi.product_id = p.id
+       WHERE oi.outbound_order_id = ANY($1::bigint[])
+       ORDER BY oi.exp_date ASC, oi.id ASC`,
+      [outboundIds],
+    );
+
+    for (const item of itemsR.rows) {
+      const batchNumber = item.batch_number ?? item.batch_no ?? null;
+      const uomPerPallet = Math.max(1, Number.parseInt(item.uom_per_pallet ?? '4', 10) || 4);
+
+      const locR = await client.query(
+        `SELECT sl.*, oil.quantity as alloc_qty, lm.zone, lm.aisle
+         FROM outbound_item_locations oil
+         JOIN stock_locations sl ON oil.stock_location_id = sl.id
+         LEFT JOIN location_master lm ON lm.location_code = sl.location_code
+         LEFT JOIN stock st ON st.id = sl.stock_id
+         WHERE oil.outbound_item_id = $1
+           AND (st.hold_status = 'available' OR st.hold_status IS NULL)
+         ORDER BY sl.location_code, sl.pallet_seq`,
+        [item.id],
+      );
+      const locationRows = locR.rows;
+
+      if (locationRows.length > 0) {
+        let palletSeq = 1;
+        for (const lr of locationRows) {
+          const locBatch = lr.batch_number ?? batchNumber;
+          const locCode = lr.location_code ?? '';
+          const qty = Number(lr.alloc_qty ?? 0);
+          const plt = calcPalletByLocation(qty, uomPerPallet, locCode);
+          await client.query(
+            `INSERT INTO picklist_items
+               (picklist_id, outbound_item_id, product_id, batch_no, batch_number,
+                location, quantity, uom, pallet, pallet_seq, stock_location_id, status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Pending')`,
+            [picklistId, item.id, item.product_id, locBatch, locBatch, locCode, qty, item.uom_type, plt, palletSeq++, lr.id],
+          );
+        }
+      } else {
+        const distribution = this.calculatePalletDistribution(
+          Number(item.actual_qty ?? item.quantity ?? 0),
+          uomPerPallet,
+        );
+        let palletSeq = 1;
+        for (const pallet of distribution) {
+          let slId: number | null = null;
+          if (item.location && batchNumber) {
+            const slR = await client.query(
+              `SELECT sl.id FROM stock_locations sl
+               LEFT JOIN stock st ON st.id = sl.stock_id
+               WHERE sl.batch_number = $1 AND sl.location_code = $2
+                 AND sl.status IN ('Available','Reserved') AND sl.pallet_seq = $3
+                 AND (st.hold_status = 'available' OR st.hold_status IS NULL)
+               LIMIT 1`,
+              [batchNumber, item.location, palletSeq],
+            );
+            slId = slR.rows[0]?.id ?? null;
+          }
+          const locCode2 = item.location ?? 'TBD';
+          const qty2 = Number(pallet.quantity);
+          const plt2 = calcPalletByLocation(qty2, uomPerPallet, locCode2);
+          await client.query(
+            `INSERT INTO picklist_items
+               (picklist_id, outbound_item_id, product_id, batch_no, batch_number,
+                location, quantity, uom, pallet, pallet_seq, stock_location_id, status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Pending')`,
+            [picklistId, item.id, item.product_id, batchNumber, batchNumber, locCode2, qty2, item.uom_type, plt2, palletSeq++, slId],
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * addCrossDockItem — S25 cross-docking. When an inbound item earmarked for a
+   * specific outbound order is received (ATP), it bypasses normal putaway and is
+   * staged directly at the STAGING location. This attaches one picklist_item row
+   * (Pending, location STAGING) to the linked outbound order's picklist so the
+   * staff can see the arriving goods on the outbound side. Runs inside the
+   * inbound.transaction(client) that calls it. Returns the picklist item id.
+   */
+  async addCrossDockItem(
+    client: any,
+    outboundOrderId: number,
+    productId: number,
+    quantity: number,
+    uom: string,
+    batchNumber: string | null,
+    createdBy: number,
+    stockLocationId: number | null,
+  ): Promise<number> {
+    const existingPicklist = await client.query(
+      'SELECT id FROM picklists WHERE outbound_order_id = $1 ORDER BY id LIMIT 1',
+      [outboundOrderId],
+    );
+    let picklistId: number;
+    if (existingPicklist.rows.length > 0) {
+      picklistId = Number(existingPicklist.rows[0].id);
+    } else {
+      const picklistNumber = await this.generateNumber();
+      const ins = await client.query(
+        `INSERT INTO picklists (outbound_order_id, picklist_number, created_date, status, created_by)
+         VALUES ($1,$2,$3,'Draft',$4) RETURNING id`,
+        [outboundOrderId, picklistNumber, todayStr(), createdBy],
+      );
+      picklistId = Number(ins.rows[0].id);
+    }
+
+    const outboundItemR = await client.query(
+      `SELECT oi.id, p.uom_per_pallet
+       FROM outbound_items oi JOIN products p ON p.id = oi.product_id
+       WHERE oi.outbound_order_id = $1 AND oi.product_id = $2
+       ORDER BY oi.id LIMIT 1`,
+      [outboundOrderId, productId],
+    );
+    const obItem = outboundItemR.rows[0];
+    const uomPerPallet = Math.max(1, Number.parseInt(obItem?.uom_per_pallet ?? '4', 10) || 4);
+
+    const batch = batchNumber ?? null;
+    const plt = Math.max(1, Math.ceil(Number(quantity || 0) / uomPerPallet));
+    const insItem = await client.query(
+      `INSERT INTO picklist_items
+         (picklist_id, outbound_item_id, product_id, batch_no, batch_number,
+          location, quantity, uom, pallet, pallet_seq, stock_location_id, status)
+       VALUES ($1,$2,$3,$4,$5,'STAGING',$6,$7,$8,1,$9,'Pending') RETURNING id`,
+      [picklistId, obItem?.id ?? null, productId, batch, batch, quantity, uom, plt, stockLocationId],
+    );
+    return Number(insItem.rows[0].id);
   }
 
   /** Picklist::calculatePalletDistribution — full pallets + remainder (floor/intdiv). */
@@ -153,10 +251,12 @@ export class PicklistService {
               o.so_number, o.do_number, o.shipment_number,
               o.destination, o.kota, o.armada_no, o.container_no,
               c.customer_name, c.address, c.city,
+              w.wave_number, w.carrier as wave_carrier, w.cutoff_time as wave_cutoff,
               u.full_name as created_by_name
        FROM picklists pkl
-       JOIN outbound_orders o ON pkl.outbound_order_id = o.id
+       LEFT JOIN outbound_orders o ON pkl.outbound_order_id = o.id
        LEFT JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN waves w ON pkl.wave_id = w.id
        LEFT JOIN users u ON pkl.created_by = u.id
        WHERE pkl.id = $1`,
       [id],
@@ -199,15 +299,17 @@ export class PicklistService {
               o.order_number as outbound_number,
               o.so_number, o.do_number, o.shipment_number,
               c.customer_name,
+              w.wave_number,
               COUNT(pki.id)::int as total_items,
               SUM(pki.quantity) as total_qty,
               CEIL(SUM(pki.pallet)) as total_pallet
        FROM picklists pkl
-       JOIN outbound_orders o ON pkl.outbound_order_id = o.id
+       LEFT JOIN outbound_orders o ON pkl.outbound_order_id = o.id
        LEFT JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN waves w ON pkl.wave_id = w.id
        LEFT JOIN picklist_items pki ON pkl.id = pki.picklist_id
        ${where}
-       GROUP BY pkl.id, o.order_number, o.so_number, o.do_number, o.shipment_number, c.customer_name
+       GROUP BY pkl.id, o.order_number, o.so_number, o.do_number, o.shipment_number, c.customer_name, w.wave_number
        ORDER BY pkl.created_date DESC, pkl.created_at DESC`;
     if (limit) {
       params.push(limit, offset);

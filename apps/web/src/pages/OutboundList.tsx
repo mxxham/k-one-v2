@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Search, Trash2, FileSpreadsheet } from 'lucide-react';
+import { Plus, Search, Trash2, FileSpreadsheet, MapPin } from 'lucide-react';
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
 import { fmtNum, fmtDate, todayISO } from '@/lib/format';
@@ -44,6 +44,7 @@ interface OutboundRow {
 interface DraftItem {
   key: number;
   product_id: number | null;
+  product_code: string;
   product_name: string;
   uom: string;
   quantity: string;
@@ -75,75 +76,113 @@ const KPI_LABELS: Record<string, string> = {
 
 const KPI_ORDER = ['total', 'pending_open', 'open', 'picking', 'picked', 'shipped', 'delivered', 'completed', 'cancelled'];
 
-function ProductSearch({ onSelect, placeholder = 'Cari produk…' }: { onSelect: (p: { id: number; product_name: string; uom?: string }) => void; placeholder?: string }) {
+interface SearchProduct {
+  id: number;
+  product_code: string;
+  product_name: string;
+  uom: string;
+  uom_per_pallet: number;
+  stock_qty: number;
+}
+
+function ProductSearch({
+  selected,
+  onSelect,
+  onClear,
+  placeholder = 'Cari produk…',
+  autoFocus,
+}: {
+  selected: { id: number; code: string; name: string } | null;
+  onSelect: (p: SearchProduct) => void;
+  onClear: () => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
+  const toast = useToast();
   const [q, setQ] = useState('');
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<SearchProduct[]>([]);
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
+  const [searching, setSearching] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  useEffect(() => {
-    const term = q.trim();
-    if (!term) {
+    if (timer.current) clearTimeout(timer.current);
+    if (!q.trim()) {
       setResults([]);
       setOpen(false);
       return;
     }
-    setLoading(true);
-    const t = window.setTimeout(async () => {
+    timer.current = setTimeout(async () => {
+      setSearching(true);
       try {
-        const res = await api('outbound', 'search_products', { params: { q: term } });
+        const res = await api('outbound', 'search_products', { params: { q } });
         setResults(res.results || []);
         setOpen(true);
-      } catch {
-        setResults([]);
+      } catch (e: any) {
+        toast('error', e.message || 'Gagal mencari produk');
       } finally {
-        setLoading(false);
+        setSearching(false);
       }
-    }, 350);
+    }, 300);
     return () => {
-      window.clearTimeout(t);
-      setLoading(false);
+      if (timer.current) clearTimeout(timer.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
+  if (selected) {
+    return (
+      <div className="flex items-center gap-2">
+        <div className="flex-1 px-3 py-2 rounded-lg bg-brand-50 border border-brand-100 text-sm">
+          <div className="font-semibold text-brand-900">{selected.code}</div>
+          <div className="text-[11px] text-gray-500 truncate">{selected.name}</div>
+        </div>
+        <button type="button" onClick={onClear} className="px-2 py-1 text-xs font-semibold text-gray-500 hover:text-red-600 flex-shrink-0">
+          Clear
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="relative" ref={boxRef}>
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        onFocus={() => results.length > 0 && setOpen(true)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 pr-8 border-[1.5px] border-gray-300 rounded-lg text-sm text-brand-900 bg-white focus:border-brand-500 focus:ring-[3px] focus:ring-brand-500/15 outline-none transition"
-      />
-      {loading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-gray-400">…</span>}
-      {open && results.length > 0 && (
-        <ul className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-xl">
-          {results.map((r) => (
-            <li key={r.id}>
-              <button
-                type="button"
-                onClick={() => {
-                  onSelect({ id: r.id, product_name: r.product_name || r.text, uom: r.uom });
-                  setQ('');
-                  setOpen(false);
-                }}
-                className="w-full text-left px-3 py-2 hover:bg-brand-50 text-sm flex items-center justify-between gap-2"
-              >
-                <span className="font-medium text-gray-800">{r.product_name || r.text}</span>
-                <span className="text-[11px] text-gray-400 whitespace-nowrap">{r.product_code}</span>
-              </button>
-            </li>
+    <div className="relative">
+      <div className="relative">
+        <MapPin className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <TextInput
+          value={q}
+          autoFocus={autoFocus}
+          onChange={(e) => setQ(e.target.value)}
+          onFocus={() => results.length && setOpen(true)}
+          placeholder={placeholder}
+          className="pl-9"
+        />
+        {searching && (
+          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-brand-600 font-semibold">Searching...</span>
+        )}
+      </div>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+          {results.length === 0 && !searching && <div className="px-3 py-2 text-xs text-gray-400">No products found</div>}
+          {results.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => {
+                onSelect(p);
+                setOpen(false);
+                setQ('');
+                setResults([]);
+              }}
+              className="w-full text-left px-3 py-2 hover:bg-brand-50 flex items-center justify-between gap-2"
+            >
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800">{p.product_code}</div>
+                <div className="text-[11px] text-gray-500 truncate">{p.product_name}</div>
+              </div>
+              <div className="text-[11px] text-gray-400 flex-shrink-0">Stock: {fmtNum(p.stock_qty, 0)}</div>
+            </button>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );
@@ -171,7 +210,11 @@ function DraftItemRow({ item, onChange, onRemove }: { item: DraftItem; onChange:
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">
           <Field label="Product" required>
-            <ProductSearch onSelect={(p) => set({ product_id: p.id, product_name: p.product_name, uom: p.uom || '', available: null })} />
+            <ProductSearch
+              selected={item.product_id ? { id: item.product_id, code: item.product_code, name: item.product_name } : null}
+              onSelect={(p) => set({ product_id: p.id, product_code: p.product_code, product_name: p.product_name, uom: p.uom || '', available: null })}
+              onClear={() => set({ product_id: null, product_code: '', product_name: '', uom: '', available: null })}
+            />
           </Field>
           {item.product_id && <div className="text-[11px] text-gray-500 mt-1">{item.product_name} · UOM {item.uom || '—'}</div>}
         </div>
@@ -228,7 +271,7 @@ function NewOutboundModal({ open, onClose, onCreated }: { open: boolean; onClose
   const [destinations, setDestinations] = useState<DraftDest[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const newItem = (): DraftItem => ({ key: Date.now() + Math.random(), product_id: null, product_name: '', uom: '', quantity: '', od_number: '', so_number: '', available: null });
+  const newItem = (): DraftItem => ({ key: Date.now() + Math.random(), product_id: null, product_code: '', product_name: '', uom: '', quantity: '', od_number: '', so_number: '', available: null });
   const newDest = (): DraftDest => ({ key: Date.now() + Math.random(), ship_to_name: '', ship_to_location: '', ship_to_street: '', kota: '', notes: '' });
 
   useEffect(() => {

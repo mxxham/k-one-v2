@@ -1,5 +1,5 @@
 ﻿import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Search, RefreshCw, Eye, Trash2, FileSpreadsheet } from 'lucide-react';
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
@@ -193,12 +193,17 @@ export default function InboundList() {
   const navigate = useNavigate();
   const toast = useToast();
   const { canWrite } = useAuth();
+  const [searchParams] = useSearchParams();
+  const asnIdParam = searchParams.get('asn_id');
 
   const [rows, setRows] = useState<InboundRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [statuses, setStatuses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [asnLink, setAsnLink] = useState<{ id: number; asn_number: string; supplier_name?: string; status: string } | null>(null);
+  const [asnReady, setAsnReady] = useState(false);
 
   const [filters, setFilters] = useState({ status: '', od_no: '' });
   const [qOdNo, setQOdNo] = useState('');
@@ -276,9 +281,56 @@ export default function InboundList() {
     loadList();
   }, [loadList]);
 
-  useEffect(() => {
+useEffect(() => {
     loadStats();
   }, [loadStats]);
+
+  useEffect(() => {
+    if (!asnIdParam) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api('asn', 'detail', { params: { id: asnIdParam } });
+        const asn = res.asn;
+        if (cancelled || !asn) return;
+        if (asn.status !== 'Pending') {
+          toast('error', 'Hanya ASN berstatus Pending yang dapat dijadikan inbound.');
+          return;
+        }
+        setAsnLink({ id: Number(asn.id), asn_number: asn.asn_number, supplier_name: asn.supplier_name, status: asn.status });
+        const asnItems = (asn.items || []).map((ai: any) => ({
+          uid: uidRef.current++,
+          product_id: Number(ai.product_id),
+          product_code: ai.product_code || '',
+          product_name: ai.product_name || '',
+          uom: ai.uom || '',
+          batch_number: ai.batch_number || '',
+          od_number: '',
+          so_number: '',
+          quantity: String(Number(ai.expected_qty || 0)),
+          manufacture_date: '',
+          exp_date: ai.exp_date || '',
+          in_process_status: 'Dues In',
+        }));
+        setForm((f) => ({
+          ...f,
+          carrier_name: asn.supplier_name || f.carrier_name,
+          expected_date: asn.expected_arrival_date || f.expected_date,
+          notes: asn.notes || f.notes,
+        }));
+        setItems(asnItems.length ? asnItems : [newItem()]);
+        setCreateOpen(true);
+      } catch (e: any) {
+        toast('error', e.message || 'Gagal memuat ASN');
+      } finally {
+        if (!cancelled) setAsnReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asnIdParam]);
 
   const applyStatus = (v: string) => {
     setFilters((f) => ({ ...f, status: v }));
@@ -344,7 +396,8 @@ export default function InboundList() {
           expected_date: form.expected_date || undefined,
           received_by: form.received_by || undefined,
           status: form.status || 'Draft',
-          notes: form.notes || undefined,
+notes: form.notes || undefined,
+          asn_id: asnLink?.id || undefined,
           items: validItems.map((i) => ({
             product_id: i.product_id!,
             batch_number: i.batch_number || undefined,
@@ -506,8 +559,19 @@ actions={
         )}
       </Card>
 
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="New Inbound" size="xl">
+<Modal open={createOpen} onClose={() => setCreateOpen(false)} title="New Inbound" size="xl">
         <div className="space-y-4">
+          {asnLink && (
+            <div className="flex items-center gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3">
+              <div className="w-1.5 h-10 rounded-full bg-brand-500" />
+              <div className="text-sm">
+                <div className="font-bold text-brand-800">Dibuat dari ASN <Link to={`/asn/${asnLink.id}`} className="underline">{asnLink.asn_number}</Link></div>
+                <div className="text-xs text-brand-700/80">
+                  Supplier: {asnLink.supplier_name || '—'} · Items sudah terisi sesuai ASN. Quantity menyesuaikan yang diterima.
+                </div>
+              </div>
+            </div>
+          )}
           <Grid cols={3}>
             <Field label="Order Date" required>
               <TextInput type="date" value={form.order_date} onChange={(e) => setForm((f) => ({ ...f, order_date: e.target.value }))} />

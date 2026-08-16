@@ -5,6 +5,10 @@ import Layout from '@/components/Layout';
 import Spinner from '@/components/Spinner';
 import Login from '@/pages/Login';
 import Dashboard from '@/pages/Dashboard';
+import DashboardInbound from '@/pages/DashboardInbound';
+import DashboardOutbound from '@/pages/DashboardOutbound';
+import DashboardInventory from '@/pages/DashboardInventory';
+import { departmentHome } from '@/lib/api';
 import InboundList from '@/pages/InboundList';
 import InboundDetail from '@/pages/InboundDetail';
 import OutboundList from '@/pages/OutboundList';
@@ -15,7 +19,12 @@ import PicklistList from '@/pages/PicklistList';
 import PicklistDetail from '@/pages/PicklistDetail';
 import StockTakeList from '@/pages/StockTakeList';
 import StockTakeDetail from '@/pages/StockTakeDetail';
+import CycleCountPage from '@/pages/CycleCountPage';
 import BinTransferPage from '@/pages/BinTransferPage';
+import ReplenishmentPage from '@/pages/ReplenishmentPage';
+import WavesPage from '@/pages/WavesPage';
+import AsnList from '@/pages/AsnList';
+import AsnDetail from '@/pages/AsnDetail';
 import ProductsPage from '@/pages/ProductsPage';
 import CustomersPage from '@/pages/CustomersPage';
 import LocationsPage from '@/pages/LocationsPage';
@@ -28,9 +37,14 @@ import ActivityLogPage from '@/pages/ActivityLogPage';
 import ResetDataPage from '@/pages/ResetDataPage';
 
 function RequireAuth() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, department } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   return <Outlet />;
+}
+
+function HomeRedirect() {
+  const { department } = useAuth();
+  return <Navigate to={departmentHome(department)} replace />;
 }
 
 function RequireWrite() {
@@ -56,7 +70,11 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route element={<RequireAuth />}>
               <Route element={<Layout />}>
-                <Route path="/" element={<Dashboard />} />
+                <Route path="/" element={<HomeRedirect />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/dashboard/inbound" element={<DashboardInbound />} />
+                <Route path="/dashboard/outbound" element={<DashboardOutbound />} />
+                <Route path="/dashboard/inventory" element={<DashboardInventory />} />
                 <Route path="/inbound" element={<InboundList />} />
                 <Route path="/inbound/:id" element={<InboundDetail />} />
                 <Route path="/outbound" element={<OutboundList />} />
@@ -65,9 +83,14 @@ export default function App() {
                 <Route path="/ledger" element={<LedgerPage />} />
                 <Route path="/picklist" element={<PicklistList />} />
                 <Route path="/picklist/:id" element={<PicklistDetail />} />
+                <Route path="/waves" element={<WavesPage />} />
+                <Route path="/asn" element={<AsnList />} />
+                <Route path="/asn/:id" element={<AsnDetail />} />
                 <Route path="/stocktake" element={<StockTakeList />} />
                 <Route path="/stocktake/:id" element={<StockTakeDetail />} />
+                <Route path="/cycle-count" element={<CycleCountPage />} />
                 <Route path="/bin-transfer" element={<BinTransferPage />} />
+                <Route path="/replenishment" element={<ReplenishmentPage />} />
                 <Route path="/reports" element={<ReportsPage />} />
                 <Route element={<RequireWrite />}>
                   <Route path="/import" element={<ImportPage />} />

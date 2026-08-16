@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus, RefreshCw, Pencil, UserPlus, Shield, Eye, Lock } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, DEPARTMENTS, Department } from '@/lib/api';
 import { fmtDate } from '@/lib/format';
 import { useToast } from '@/components/Toast';
 import { useAuth } from '@/context/AuthContext';
@@ -17,6 +17,7 @@ interface User {
   full_name: string;
   email: string;
   role: string;
+  department?: string;
   is_active: number;
   created_at: string;
 }
@@ -38,6 +39,7 @@ const emptyForm = {
   full_name: '',
   email: '',
   role: 'viewer',
+  department: 'all',
 };
 
 export default function UsersPage() {
@@ -46,6 +48,7 @@ export default function UsersPage() {
 
   const [rows, setRows] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -59,6 +62,7 @@ export default function UsersPage() {
       const res = await api('users', 'list');
       setRows(res.rows || []);
       setRoles(res.roles || []);
+      setDepartments(res.departments || []);
     } catch (err: any) {
       toast('error', err.message || 'Gagal memuat data user');
     } finally {
@@ -72,7 +76,7 @@ export default function UsersPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ ...emptyForm, role: 'viewer' });
+    setForm({ ...emptyForm, role: 'viewer', department: 'all' });
     setModalOpen(true);
   };
 
@@ -84,6 +88,7 @@ export default function UsersPage() {
       full_name: u.full_name || '',
       email: u.email || '',
       role: u.role || 'viewer',
+      department: u.department || 'all',
     });
     setModalOpen(true);
   };
@@ -105,6 +110,7 @@ export default function UsersPage() {
         full_name: form.full_name.trim(),
         email: form.email.trim() || undefined,
         role: form.role,
+        department: form.department,
       };
       if (form.password.trim()) payload.password = form.password;
       if (editing) {
@@ -132,6 +138,7 @@ export default function UsersPage() {
           full_name: u.full_name,
           email: u.email || undefined,
           role: u.role,
+          department: u.department || 'all',
           is_active: Number(u.is_active) === 1 ? 0 : 1,
         },
       });
@@ -153,6 +160,8 @@ export default function UsersPage() {
   };
 
   const set = (k: keyof typeof emptyForm) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const deptOptions = (departments && departments.length ? departments : DEPARTMENTS) as Array<{ key: string; label: string }>;
 
   const stats = [
     { label: 'Total User', value: rows.length, icon: UserPlus, grad: 'from-brand-600 to-brand-400' },
@@ -217,6 +226,7 @@ export default function UsersPage() {
                   <th className="px-3 py-2.5 text-left font-bold">Nama Lengkap</th>
                   <th className="px-3 py-2.5 text-left font-bold">Email</th>
                   <th className="px-3 py-2.5 text-left font-bold">Role</th>
+                  <th className="px-3 py-2.5 text-left font-bold">Departemen</th>
                   <th className="px-3 py-2.5 text-left font-bold">Dibuat</th>
                   <th className="px-3 py-2.5 text-center font-bold">Status</th>
                   <th className="px-3 py-2.5 text-center font-bold">Aksi</th>
@@ -235,6 +245,11 @@ export default function UsersPage() {
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${ROLE_STYLES[u.role] || ROLE_STYLES.viewer}`}>
                         <Shield className="w-3 h-3" />
                         {u.role}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border bg-teal-50 text-teal-700 border-teal-200">
+                        {(u.department || 'all').toUpperCase()}
                       </span>
                     </td>
                     <td className="px-3 py-2.5 text-gray-600">{fmtDate(u.created_at)}</td>
@@ -292,7 +307,7 @@ export default function UsersPage() {
               <TextInput value={form.full_name} onChange={set('full_name')} placeholder="Nama lengkap" />
             </Field>
           </Grid>
-          <Grid cols={2}>
+          <Grid cols={3}>
             <Field label="Email">
               <TextInput type="email" value={form.email} onChange={set('email')} placeholder="email@contoh.com" />
             </Field>
@@ -300,6 +315,13 @@ export default function UsersPage() {
               <Select value={form.role} onChange={set('role')}>
                 {roles.map((r) => (
                   <option key={r.key} value={r.key}>{r.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Departemen">
+              <Select value={form.department} onChange={set('department')}>
+                {deptOptions.map((d) => (
+                  <option key={d.key} value={d.key}>{d.label}</option>
                 ))}
               </Select>
             </Field>

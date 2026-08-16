@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, FormEvent, ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, PackagePlus, Trash2, Printer, FileText, ClipboardList } from 'lucide-react';
+import { ArrowLeft, Plus, PackagePlus, Trash2, Printer, FileText, ClipboardList, MapPin } from 'lucide-react';
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
 import { fmtNum, fmtDate, fmtDateTime } from '@/lib/format';
@@ -9,6 +9,7 @@ import { useToast } from '@/components/Toast';
 import { PageHeader } from '@/components/PageHeader';
 import { Card, EmptyState } from '@/components/Card';
 import StatusBadge from '@/components/StatusBadge';
+
 import Spinner from '@/components/Spinner';
 import Modal from '@/components/Modal';
 import ConfirmButton from '@/components/ConfirmButton';
@@ -31,6 +32,8 @@ interface OutboundItem {
   in_process_status?: string;
   notes?: string;
   picked_locations?: any[];
+  cross_dock_inbound_item_id?: number | null;
+  cross_dock_inbound_number?: string;
 }
 
 interface DestRow {
@@ -67,75 +70,113 @@ function InProcessPill({ status }: { status?: string }) {
   );
 }
 
-function ProductSearch({ onSelect, placeholder = 'Cari produk…' }: { onSelect: (p: { id: number; product_name: string; uom?: string }) => void; placeholder?: string }) {
+interface SearchProduct {
+  id: number;
+  product_code: string;
+  product_name: string;
+  uom: string;
+  uom_per_pallet: number;
+  stock_qty: number;
+}
+
+function ProductSearch({
+  selected,
+  onSelect,
+  onClear,
+  placeholder = 'Cari produk…',
+  autoFocus,
+}: {
+  selected: { id: number; code: string; name: string } | null;
+  onSelect: (p: SearchProduct) => void;
+  onClear: () => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
+  const toast = useToast();
   const [q, setQ] = useState('');
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<SearchProduct[]>([]);
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
+  const [searching, setSearching] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  useEffect(() => {
-    const term = q.trim();
-    if (!term) {
+    if (timer.current) clearTimeout(timer.current);
+    if (!q.trim()) {
       setResults([]);
       setOpen(false);
       return;
     }
-    setLoading(true);
-    const t = window.setTimeout(async () => {
+    timer.current = setTimeout(async () => {
+      setSearching(true);
       try {
-        const res = await api('outbound', 'search_products', { params: { q: term } });
+        const res = await api('outbound', 'search_products', { params: { q } });
         setResults(res.results || []);
         setOpen(true);
-      } catch {
-        setResults([]);
+      } catch (e: any) {
+        toast('error', e.message || 'Gagal mencari produk');
       } finally {
-        setLoading(false);
+        setSearching(false);
       }
-    }, 350);
+    }, 300);
     return () => {
-      window.clearTimeout(t);
-      setLoading(false);
+      if (timer.current) clearTimeout(timer.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
+  if (selected) {
+    return (
+      <div className="flex items-center gap-2">
+        <div className="flex-1 px-3 py-2 rounded-lg bg-brand-50 border border-brand-100 text-sm">
+          <div className="font-semibold text-brand-900">{selected.code}</div>
+          <div className="text-[11px] text-gray-500 truncate">{selected.name}</div>
+        </div>
+        <button type="button" onClick={onClear} className="px-2 py-1 text-xs font-semibold text-gray-500 hover:text-red-600 flex-shrink-0">
+          Clear
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="relative" ref={boxRef}>
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        onFocus={() => results.length > 0 && setOpen(true)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 pr-8 border-[1.5px] border-gray-300 rounded-lg text-sm text-brand-900 bg-white focus:border-brand-500 focus:ring-[3px] focus:ring-brand-500/15 outline-none transition"
-      />
-      {loading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-gray-400">…</span>}
-      {open && results.length > 0 && (
-        <ul className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-xl">
-          {results.map((r) => (
-            <li key={r.id}>
-              <button
-                type="button"
-                onClick={() => {
-                  onSelect({ id: r.id, product_name: r.product_name || r.text, uom: r.uom });
-                  setQ('');
-                  setOpen(false);
-                }}
-                className="w-full text-left px-3 py-2 hover:bg-brand-50 text-sm flex items-center justify-between gap-2"
-              >
-                <span className="font-medium text-gray-800">{r.product_name || r.text}</span>
-                <span className="text-[11px] text-gray-400 whitespace-nowrap">{r.product_code}</span>
-              </button>
-            </li>
+    <div className="relative">
+      <div className="relative">
+        <MapPin className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <TextInput
+          value={q}
+          autoFocus={autoFocus}
+          onChange={(e) => setQ(e.target.value)}
+          onFocus={() => results.length && setOpen(true)}
+          placeholder={placeholder}
+          className="pl-9"
+        />
+        {searching && (
+          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-brand-600 font-semibold">Searching...</span>
+        )}
+      </div>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+          {results.length === 0 && !searching && <div className="px-3 py-2 text-xs text-gray-400">No products found</div>}
+          {results.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => {
+                onSelect(p);
+                setOpen(false);
+                setQ('');
+                setResults([]);
+              }}
+              className="w-full text-left px-3 py-2 hover:bg-brand-50 flex items-center justify-between gap-2"
+            >
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800">{p.product_code}</div>
+                <div className="text-[11px] text-gray-500 truncate">{p.product_name}</div>
+              </div>
+              <div className="text-[11px] text-gray-400 flex-shrink-0">Stock: {fmtNum(p.stock_qty, 0)}</div>
+            </button>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );
@@ -144,6 +185,7 @@ function ProductSearch({ onSelect, placeholder = 'Cari produk…' }: { onSelect:
 function AddItemModal({ open, onClose, outboundId, onDone }: { open: boolean; onClose: () => void; outboundId: number; onDone: () => void }) {
   const toast = useToast();
   const [productId, setProductId] = useState<number | null>(null);
+  const [productCode, setProductCode] = useState('');
   const [productName, setProductName] = useState('');
   const [uom, setUom] = useState('');
   const [quantity, setQuantity] = useState('');
@@ -158,6 +200,7 @@ function AddItemModal({ open, onClose, outboundId, onDone }: { open: boolean; on
   useEffect(() => {
     if (!open) return;
     setProductId(null);
+    setProductCode('');
     setProductName('');
     setUom('');
     setQuantity('');
@@ -226,12 +269,22 @@ function AddItemModal({ open, onClose, outboundId, onDone }: { open: boolean; on
         <Grid cols={2}>
           <Field label="Product" required>
             <ProductSearch
+              selected={productId ? { id: productId, code: productCode, name: productName } : null}
               onSelect={(p) => {
                 setProductId(p.id);
+                setProductCode(p.product_code);
                 setProductName(p.product_name);
                 setUom(p.uom || '');
                 setAvailable(null);
               }}
+              onClear={() => {
+                setProductId(null);
+                setProductCode('');
+                setProductName('');
+                setUom('');
+                setAvailable(null);
+              }}
+              autoFocus
             />
             {productId && <div className="text-[11px] text-gray-500 mt-1">{productName} · UOM {uom || '—'}</div>}
           </Field>
@@ -536,7 +589,18 @@ export default function OutboundDetail() {
                     <td className="px-3 py-2.5 text-gray-600">{it.od_number || '—'}</td>
                     <td className="px-3 py-2.5 text-gray-600">{it.so_number || '—'}</td>
                     <td className="px-3 py-2.5 text-gray-600">{it.batch_number || it.batch_no || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{it.location || '—'}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-gray-700">
+                      {it.cross_dock_inbound_item_id ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-2 py-0.5">
+                            <PackagePlus className="w-3 h-3" /> CROSS-DOCK
+                          </span>
+                          <span className="text-[11px] text-violet-700">via {it.cross_dock_inbound_number || 'Inbound'} @ STAGING</span>
+                        </div>
+                      ) : (
+                        it.location || '—'
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-gray-700 text-right font-medium">{fmtNum(it.quantity, 0)}</td>
                     <td className="px-3 py-2.5 text-gray-600">{it.uom || '—'}</td>
                     <td className="px-3 py-2.5 text-gray-700 text-right">{fmtNum(it.actual_qty, 0)}</td>
@@ -550,9 +614,10 @@ export default function OutboundDetail() {
                         {(it.picked_locations || []).map((p: any, i: number) => (
                           <span
                             key={i}
-                            className="inline-flex items-center px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 text-[11px] font-semibold border border-brand-100"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 text-[11px] font-semibold border border-brand-100"
                           >
-                            {p.location_code ?? p}@{p.qty ?? p.quantity ?? ''}
+                            <span className="font-mono">{p.location_code ?? p}</span>
+                            @{p.qty ?? p.quantity ?? ''}
                           </span>
                         ))}
                       </div>

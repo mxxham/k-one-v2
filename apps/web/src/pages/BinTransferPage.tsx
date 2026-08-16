@@ -1,8 +1,9 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { Search, ArrowRight, Plus, Play, X, Boxes } from 'lucide-react';
+import { Search, ArrowRight, Plus, Play, X, Boxes, AlertTriangle } from 'lucide-react';
 import { PageHeader } from '@/components/PageHeader';
 import { EmptyState } from '@/components/Card';
 import StatusBadge from '@/components/StatusBadge';
+
 import Modal from '@/components/Modal';
 import Pagination from '@/components/Pagination';
 import Spinner from '@/components/Spinner';
@@ -12,6 +13,7 @@ import { useToast } from '@/components/Toast';
 import { useAuth } from '@/context/AuthContext';
 import { api } from '@/lib/api';
 import { fmtNum, fmtDate, todayISO } from '@/lib/format';
+import ScanInput from '@/components/ScanInput';
 
 const PER_PAGE = 20;
 const STATUS_OPTIONS = ['Pending', 'Completed', 'Cancelled'];
@@ -81,6 +83,11 @@ export default function BinTransferPage() {
   const [reason, setReason] = useState('');
   const [transferDate, setTransferDate] = useState(todayISO());
   const [submitting, setSubmitting] = useState(false);
+
+  const [scanErr, setScanErr] = useState<string | null>(null);
+  const [scanCode, setScanCode] = useState('');
+  const [scanValid, setScanValid] = useState<boolean | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -201,6 +208,69 @@ export default function BinTransferPage() {
     setFromLoc('');
   };
 
+  // Phase 2 — scanner-first bin transfer: a scan auto-selects the product if
+  // none is chosen yet; otherwise it validates the scanned product matches the
+  // selected product. Mismatch requires an override with a reason.
+  const handleScan = async (code: string) => {
+    setScanErr(null);
+    setScanValid(null);
+    setOverrideReason('');
+    let res: any;
+    try {
+      res = await api('stock', 'scan', { params: { code } });
+    } catch (err: any) {
+      setScanErr(err.message || 'Gagal membaca kode');
+      return;
+    }
+    if (!res?.found) {
+      setScanErr(`Kode '${code}' tidak dikenali (product tidak ditemukan).`);
+      return;
+    }
+    const scannedCode = res.product?.product_code || code;
+    if (!productId) {
+      const sel: SearchProduct = {
+        id: Number(res.product.id),
+        text: `${scannedCode} — ${res.product.product_name || ''}`,
+        product_code: scannedCode,
+        product_name: res.product.product_name || '',
+        uom: res.product.uom_type || '',
+        stock_qty: 0,
+      };
+      selectProduct(sel);
+      setScanValid(true);
+      toast('success', `Produk ${scannedCode} dipilih`);
+      return;
+    }
+    const selectedCode = productName.split(' — ')[0] || '';
+    if (selectedCode === scannedCode) {
+      setScanValid(true);
+      toast('success', `${scannedCode} cocok`);
+    } else {
+      setScanCode(code);
+      setScanValid(false);
+      setScanErr(`Kode '${scannedCode}' tidak cocok dengan produk terpilih '${selectedCode || '—'}'.`);
+    }
+  };
+
+  const handleOverride = async () => {
+    if (!overrideReason.trim()) {
+      toast('error', 'Alasan override wajib diisi');
+      return;
+    }
+    try {
+      await api('stock', 'scan_override', {
+        method: 'POST',
+        body: { code: scanCode, reason: overrideReason.trim(), context: 'bintransfer:new' },
+      });
+      setScanErr(null);
+      setScanValid(true);
+      setOverrideReason('');
+      toast('success', 'Override dicatat');
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal menyimpan override');
+    }
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!productId) {
@@ -312,9 +382,11 @@ export default function BinTransferPage() {
                     </td>
                     <td className="px-3 py-2.5 text-gray-600">{r.batch_number || '—'}</td>
                     <td className="px-3 py-2.5">
-                      <span className="font-medium text-gray-700">{r.from_location}</span>
-                      <ArrowRight className="w-3 h-3 inline mx-1 text-brand-500" />
-                      <span className="font-medium text-gray-700">{r.to_location}</span>
+                      <div className="flex items-center gap-1 flex-wrap font-mono text-xs">
+                        {r.from_location || '—'}
+                        <ArrowRight className="w-3 h-3 text-brand-500" />
+                        {r.to_location || '—'}
+                      </div>
                     </td>
                     <td className="px-3 py-2.5 text-right font-semibold">{fmtNum(r.quantity, 0)}</td>
                     <td className="px-3 py-2.5 text-gray-600">{r.uom || '—'}</td>
@@ -359,6 +431,46 @@ export default function BinTransferPage() {
 
       <Modal open={open} onClose={() => setOpen(false)} title="Bin Transfer Baru" size="md">
         <form onSubmit={submit} className="space-y-4">
+          <div>
+            <div className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Scan Produk</div>
+            <ScanInput onScan={handleScan} placeholder={productId ? 'Scan SKU untuk validasi…' : 'Scan SKU untuk memilih produk…'} disabled={submitting} />
+            {scanValid === true && (
+              <div className="mt-1.5 text-xs text-emerald-600 font-semibold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" /> Produk cocok
+              </div>
+            )}
+            {scanErr && (
+              <div className="mt-2 rounded-lg border-[1.5px] border-red-200 bg-red-50 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                  <div className="text-sm text-red-700">{scanErr}</div>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <TextInput
+                    placeholder="Alasan override (wajib)"
+                    value={overrideReason}
+                    onChange={(ev) => setOverrideReason(ev.target.value)}
+                    className="max-w-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleOverride}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700"
+                  >
+                    Override & Lanjut
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setScanErr(null); setOverrideReason(''); setScanValid(null); }}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <Field label="Cari Produk" required>
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -491,8 +603,10 @@ export default function BinTransferPage() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-gray-500">Lokasi</span>
-              <span className="font-semibold">
-                {detail.from_location} <ArrowRight className="w-3 h-3 inline text-brand-600" /> {detail.to_location}
+              <span className="font-semibold flex items-center gap-1.5 font-mono text-sm">
+                {detail.from_location || '—'}
+                <ArrowRight className="w-3 h-3 text-brand-600" />
+                {detail.to_location || '—'}
               </span>
             </div>
             <div className="flex items-center justify-between">

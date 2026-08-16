@@ -4,6 +4,9 @@
  * transaction, updates the task status in Redis, and (optionally) emits the
  * result to a completion channel the API/frontend can poll.
  */
+import { config } from 'dotenv';
+import { resolve } from 'path';
+config({ path: resolve(__dirname, '../.env') });
 import { Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
 import { Pool } from 'pg';

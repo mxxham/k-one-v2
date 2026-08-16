@@ -1,9 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-<<<<<<< HEAD
-import { Plus, RefreshCw, Pencil, Layers, FlaskConical, Box, Trash2 } from 'lucide-react';
-=======
 import { Plus, RefreshCw, Pencil, Layers, FlaskConical, Box, Trash2, Route, AlertTriangle } from 'lucide-react';
->>>>>>> 3493489 ( KOV better inbound)
 import { api } from '@/lib/api';
 import { fmtNum } from '@/lib/format';
 import { useToast } from '@/components/Toast';
@@ -13,14 +9,12 @@ import { Card, EmptyState } from '@/components/Card';
 import Spinner from '@/components/Spinner';
 import Modal from '@/components/Modal';
 import { Field, TextInput, Select, Grid } from '@/components/Field';
-<<<<<<< HEAD
-=======
 import { ZONE_COLORS } from '@/components/Rack3D';
->>>>>>> 3493489 ( KOV better inbound)
 
 const LEVELS = ['A', 'B', 'C', 'D', 'E'];
+const AISLES = ['CA', 'CB', 'CC', 'CD', 'CE', 'CF', 'CG'];
 
-const UOM_OPTIONS = ['Drum', 'Carton', 'Pail', 'EA', 'Bags'];
+const UOM_OPTIONS = ['Drum', 'Carton', 'CAR', 'Pail', 'EA', 'Bags', 'Fluidbag', 'IBC'];
 const ZONE_TYPES = ['PICK_FAST', 'RESERVE', 'BULK', 'QUARANTINE', 'STAGING', 'UNALLOCATED'];
 
 interface UomLimitRow {
@@ -65,8 +59,6 @@ interface ProductOption {
   uom_type: string;
 }
 
-<<<<<<< HEAD
-=======
 interface ZoneAisleRow {
   id: number;
   zone_code: string;
@@ -78,9 +70,9 @@ interface ZoneAisleRow {
   is_active: number;
 }
 
->>>>>>> 3493489 ( KOV better inbound)
 const emptyUom = { uom_type: 'Drum', min_level: 'A', max_level: 'E', allow_pick_face: 1, max_weight_kg: '', max_height_cm: '', requires_equipment: 0 };
 const emptyZone = { zone_code: '', zone_name: '', zone_type: 'RESERVE', priority: 10, is_active: 1 };
+const emptyZoneAisle = { zone_code: '', aisle: 'CA', min_level: 'A', max_level: 'E', is_active: 1 };
 const emptyRule = {
   product_id: '',
   preferred_zone_code: 'RESERVE',
@@ -96,11 +88,7 @@ export default function ZoningPage() {
   const toast = useToast();
   const { canWrite } = useAuth();
 
-<<<<<<< HEAD
-  const [tab, setTab] = useState<'uom' | 'product' | 'zone'>('uom');
-=======
   const [tab, setTab] = useState<'uom' | 'product' | 'zone' | 'zoneaisles'>('uom');
->>>>>>> 3493489 ( KOV better inbound)
 
   const [uomLimits, setUomLimits] = useState<UomLimitRow[]>([]);
   const [productRules, setProductRules] = useState<ProductRuleRow[]>([]);
@@ -108,12 +96,8 @@ export default function ZoningPage() {
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [loading, setLoading] = useState(true);
 
-<<<<<<< HEAD
-  // modals
-=======
   const [zoneAisles, setZoneAisles] = useState<ZoneAisleRow[]>([]);
 
->>>>>>> 3493489 ( KOV better inbound)
   const [uomModal, setUomModal] = useState(false);
   const [uomForm, setUomForm] = useState(emptyUom);
   const [zoneModal, setZoneModal] = useState(false);
@@ -123,6 +107,10 @@ export default function ZoningPage() {
   const [ruleForm, setRuleForm] = useState(emptyRule);
   const [editingRule, setEditingRule] = useState<ProductRuleRow | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [zaModal, setZaModal] = useState(false);
+  const [zaForm, setZaForm] = useState(emptyZoneAisle);
+  const [editingZa, setEditingZa] = useState<ZoneAisleRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -148,8 +136,6 @@ export default function ZoningPage() {
     load();
   }, [load]);
 
-<<<<<<< HEAD
-=======
   const loadZoneAisles = useCallback(async () => {
     try {
       const res = await api('putaway', 'zone_aisles');
@@ -210,7 +196,6 @@ export default function ZoningPage() {
     }
   };
 
->>>>>>> 3493489 ( KOV better inbound)
   // ---------------------------------------------------------------- UOM limits
   const openUomEdit = (row?: UomLimitRow) => {
     setUomForm(
@@ -238,6 +223,7 @@ export default function ZoningPage() {
     setSaving(true);
     try {
       await api('putaway', 'save_uom_limit', {
+        method: 'POST',
         body: {
           ...uomForm,
           max_weight_kg: uomForm.max_weight_kg === '' ? undefined : uomForm.max_weight_kg,
@@ -285,6 +271,7 @@ export default function ZoningPage() {
     setSaving(true);
     try {
       await api('putaway', 'save_product_rule', {
+        method: 'POST',
         body: {
           ...ruleForm,
           product_id: Number(ruleForm.product_id),
@@ -303,8 +290,9 @@ export default function ZoningPage() {
   };
 
   const deleteRule = async (r: ProductRuleRow) => {
+    if (!window.confirm('Hapus aturan produk ini?')) return;
     try {
-      await api('putaway', 'delete_product_rule', { body: { product_id: r.product_id } });
+      await api('putaway', 'delete_product_rule', { method: 'POST', body: { product_id: r.product_id } });
       toast('success', 'Aturan produk dihapus');
       load();
     } catch (err: any) {
@@ -338,6 +326,7 @@ export default function ZoningPage() {
     setSaving(true);
     try {
       await api('putaway', 'save_zone', {
+        method: 'POST',
         body: { id: editingZone?.id, ...zoneForm, zone_code: zoneForm.zone_code.trim().toUpperCase() },
       });
       toast('success', 'Zone tersimpan');
@@ -351,8 +340,9 @@ export default function ZoningPage() {
   };
 
   const deleteZone = async (z: ZoneRow) => {
+    if (!window.confirm('Hapus zone ini?')) return;
     try {
-      await api('putaway', 'delete_zone', { body: { id: z.id } });
+      await api('putaway', 'delete_zone', { method: 'POST', body: { id: z.id } });
       toast('success', 'Zone dihapus');
       load();
     } catch (err: any) {
@@ -364,10 +354,7 @@ export default function ZoningPage() {
     { key: 'uom' as const, label: 'UOM Level Limits', icon: FlaskConical },
     { key: 'product' as const, label: 'Produk & Putaway Rules', icon: Box },
     { key: 'zone' as const, label: 'Zones', icon: Layers },
-<<<<<<< HEAD
-=======
     { key: 'zoneaisles' as const, label: 'Zone Aisles', icon: Route },
->>>>>>> 3493489 ( KOV better inbound)
   ];
 
   return (
@@ -391,6 +378,14 @@ export default function ZoningPage() {
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-white text-sm font-semibold border border-white/20"
               >
                 <Plus className="w-4 h-4" /> New Zone
+              </button>
+            )}
+            {canWrite && tab === 'zoneaisles' && (
+              <button
+                onClick={() => openZaEdit()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-white text-sm font-semibold border border-white/20"
+              >
+                <Plus className="w-4 h-4" /> New Binding
               </button>
             )}
             <button
@@ -425,7 +420,19 @@ export default function ZoningPage() {
       ) : (
         <>
           {tab === 'uom' && (
-            <Card
+            <>
+              {uomLimits.some((u) => u.uom_type === 'Drum' && Number(u.requires_equipment) === 1) && (
+                <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="text-sm text-amber-800">
+                    <span className="font-bold">Aturan DRUM (hard cap):</span>{' '}
+                    drum hanya diizinkan di Level A–C pada rack dengan akses heavy equipment
+                    (equipment_accessible=1). Lokasi Level D/E atau rack tanpa akses alat
+                    berat otomatis <span className="font-bold">ditolak</span> saat putaway / inbound.
+                  </div>
+                </div>
+              )}
+              <Card
               title="Batas Fisik UOM per Level"
               actions={
                 canWrite ? (
@@ -484,6 +491,7 @@ export default function ZoningPage() {
                 </div>
               )}
             </Card>
+            </>
           )}
 
           {tab === 'product' && (
@@ -626,8 +634,6 @@ export default function ZoningPage() {
               )}
             </Card>
           )}
-<<<<<<< HEAD
-=======
 
           {tab === 'zoneaisles' && (
             <Card title="Binding Zone ↔ Aisle/Level (Aisle-Level Zoning)">
@@ -697,7 +703,6 @@ export default function ZoningPage() {
               )}
             </Card>
           )}
->>>>>>> 3493489 ( KOV better inbound)
         </>
       )}
 
@@ -869,8 +874,6 @@ export default function ZoningPage() {
           </div>
         </form>
       </Modal>
-<<<<<<< HEAD
-=======
 
       {/* Zone-aisle modal */}
       <Modal open={zaModal} onClose={() => setZaModal(false)} title={editingZa ? 'Edit Binding Zone-Aisle' : 'New Binding Zone-Aisle'} size="md">
@@ -924,7 +927,6 @@ export default function ZoningPage() {
           </div>
         </form>
       </Modal>
->>>>>>> 3493489 ( KOV better inbound)
     </div>
   );
 }

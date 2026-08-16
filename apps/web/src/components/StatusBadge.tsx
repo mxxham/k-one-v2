@@ -17,6 +17,15 @@ const STATUS_STYLES: Record<string, string> = {
   Delivered: 'bg-teal-50 text-teal-700 border-teal-300',
   // Picklist
   Confirmed: 'bg-cyan-50 text-cyan-700 border-cyan-300',
+  // Wave
+  Planning: 'bg-sky-50 text-sky-700 border-sky-300',
+  Active: 'bg-amber-50 text-amber-700 border-amber-300',
+  // ASN
+  Received: 'bg-emerald-50 text-emerald-700 border-emerald-300',
+  // ABC velocity
+  A: 'bg-red-50 text-red-700 border-red-300',
+  B: 'bg-amber-50 text-amber-700 border-amber-300',
+  C: 'bg-gray-100 text-gray-600 border-gray-300',
   // Stock take
   'In Progress': 'bg-amber-50 text-amber-700 border-amber-300',
   Counting: 'bg-amber-50 text-amber-700 border-amber-300',
@@ -32,6 +41,11 @@ const STATUS_STYLES: Record<string, string> = {
   Plus: 'bg-emerald-50 text-emerald-700 border-emerald-300',
   Minus: 'bg-red-50 text-red-700 border-red-300',
   Clear: 'bg-gray-100 text-gray-700 border-gray-300',
+  // Stock hold / quarantine
+  available: 'bg-emerald-50 text-emerald-700 border-emerald-300',
+  on_hold: 'bg-amber-50 text-amber-700 border-amber-300',
+  quarantine: 'bg-orange-50 text-orange-700 border-orange-300',
+  damaged: 'bg-red-50 text-red-700 border-red-300',
 };
 
 export default function StatusBadge({ status }: { status?: string | null }) {

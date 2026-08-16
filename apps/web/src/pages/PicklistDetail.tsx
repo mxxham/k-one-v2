@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, CheckCheck, PackageCheck, RefreshCw, Save, Printer } from 'lucide-react';
+import { ArrowLeft, CheckCheck, PackageCheck, RefreshCw, Save, Printer, AlertTriangle } from 'lucide-react';
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
 import { fmtDate, fmtDateTime, fmtNum } from '@/lib/format';
@@ -9,9 +9,11 @@ import { useAuth } from '@/context/AuthContext';
 import { PageHeader } from '@/components/PageHeader';
 import { Card, EmptyState } from '@/components/Card';
 import StatusBadge from '@/components/StatusBadge';
+
 import Spinner from '@/components/Spinner';
 import ConfirmButton from '@/components/ConfirmButton';
 import { Select, TextInput } from '@/components/Field';
+import ScanInput from '@/components/ScanInput';
 
 interface PicklistItem {
   id: number;
@@ -37,6 +39,9 @@ interface PicklistDetail {
   created_date?: string;
   outbound_order_id?: number | null;
   outbound_number?: string | null;
+  wave_id?: number | null;
+  wave_number?: string | null;
+  wave_carrier?: string | null;
   notes?: string;
   created_by_name?: string;
   confirmed_at?: string;
@@ -57,6 +62,9 @@ export default function PicklistDetail() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [edits, setEdits] = useState<Record<number, { qty: string; status: string }>>({});
+  const [scanErr, setScanErr] = useState<string | null>(null);
+  const [scanCode, setScanCode] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -126,6 +134,76 @@ export default function PicklistDetail() {
       load();
     } catch (err: any) {
       toast('error', err.message || 'Gagal memperbarui item');
+    }
+  };
+
+  // Phase 2 — scanner-first picking: a matching scan auto-confirms the next
+  // Pending item (full qty + status Picked). Mismatch requires an explicit
+  // override with a reason logged to activity_log (stock::scan_override).
+  const nextPending = items.find((it) => it.status === 'Pending');
+
+  const autoConfirm = async (item: PicklistItem) => {
+    try {
+      await api('picklist', 'update_item', {
+        body: {
+          item_id: item.id,
+          picked_quantity: Number(item.quantity ?? 0),
+          status: 'Picked',
+        },
+      });
+      toast('success', `${item.product_code || item.id} dikonfirmasi (${fmtNum(item.quantity, 0)} ${item.uom || ''})`);
+      setScanErr(null);
+      setOverrideReason('');
+      load();
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal mengonfirmasi item');
+    }
+  };
+
+  const handleScan = async (code: string) => {
+    setScanErr(null);
+    setOverrideReason('');
+    if (!nextPending) {
+      setScanErr('Tidak ada item Pending untuk dikonfirmasi.');
+      return;
+    }
+    let res: any;
+    try {
+      res = await api('stock', 'scan', { params: { code } });
+    } catch (err: any) {
+      setScanErr(err.message || 'Gagal membaca kode');
+      return;
+    }
+    if (!res?.found) {
+      setScanErr(`Kode '${code}' tidak dikenali (product tidak ditemukan).`);
+      return;
+    }
+    const scannedCode = res.product?.product_code || code;
+    const expectedCode = nextPending.product_code || '';
+    if (expectedCode && scannedCode === expectedCode) {
+      await autoConfirm(nextPending);
+    } else {
+      setScanCode(code);
+      setScanErr(
+        `Kode '${scannedCode}' TIDAK sesuai item berikutnya '${expectedCode || '—'}' ` +
+        `(${nextPending.product_name || ''}). Isi alasan untuk override.`,
+      );
+    }
+  };
+
+  const handleOverride = async () => {
+    if (!overrideReason.trim()) {
+      toast('error', 'Alasan override wajib diisi');
+      return;
+    }
+    try {
+      await api('stock', 'scan_override', {
+        method: 'POST',
+        body: { code: scanCode, reason: overrideReason.trim(), context: `picklist:${picklist?.picklist_number || picklist?.id}` },
+      });
+      await autoConfirm(nextPending!);
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal menyimpan override');
     }
   };
 
@@ -213,8 +291,12 @@ export default function PicklistDetail() {
             <div className="text-sm font-medium text-gray-800">{fmtDateTime(picklist.created_date)}</div>
           </div>
           <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1">Outbound</div>
-            {picklist.outbound_order_id ? (
+            <div className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1">{picklist.wave_id ? 'Wave' : 'Outbound'}</div>
+            {picklist.wave_id ? (
+              <Link to={`/waves`} className="text-sm font-medium text-brand-600 hover:underline">
+                {picklist.wave_number || `Wave #${picklist.wave_id}`}
+              </Link>
+            ) : picklist.outbound_order_id ? (
               <Link to={`/outbound/${picklist.outbound_order_id}`} className="text-sm font-medium text-brand-600 hover:underline">
                 {picklist.outbound_number || `#${picklist.outbound_order_id}`}
               </Link>
@@ -246,6 +328,46 @@ export default function PicklistDetail() {
       </Card>
 
       <Card title="Items">
+        {canWrite && (
+          <div className="px-4 pt-3">
+            <ScanInput onScan={handleScan} placeholder={`Scan SKU → konfirmasi item berikutnya${nextPending ? ` (${nextPending.product_code || ''})` : ''}`} disabled={busy} className="max-w-md" />
+            {nextPending && (
+              <div className="text-[11px] text-gray-400 mt-1">
+                Berikutnya: {nextPending.product_code || '—'} · {nextPending.product_name || ''} · {nextPending.location || '—'}
+              </div>
+            )}
+            {scanErr && (
+              <div className="mt-2 rounded-lg border-[1.5px] border-red-200 bg-red-50 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                  <div className="text-sm text-red-700">{scanErr}</div>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <TextInput
+                    placeholder="Alasan override (wajib)"
+                    value={overrideReason}
+                    onChange={(ev) => setOverrideReason(ev.target.value)}
+                    className="max-w-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleOverride}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700"
+                  >
+                    Override & Lanjut
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setScanErr(null); setOverrideReason(''); }}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {items.length === 0 ? (
           <EmptyState message="Belum ada item" />
         ) : (
@@ -277,7 +399,7 @@ export default function PicklistDetail() {
                         <div className="text-xs text-gray-500">{item.product_name || ''}</div>
                       </td>
                       <td className="px-4 py-3 border-t border-gray-100 text-sm text-gray-700">{item.batch_no || item.batch_number || '—'}</td>
-                      <td className="px-4 py-3 border-t border-gray-100 text-sm text-gray-700">{item.location || '—'}</td>
+                      <td className="px-4 py-3 border-t border-gray-100 font-mono text-xs text-gray-700">{item.location || '—'}</td>
                       <td className="px-4 py-3 border-t border-gray-100 text-sm text-gray-700 text-right">{fmtNum(item.quantity)}</td>
                       <td className="px-4 py-3 border-t border-gray-100 text-sm text-gray-700">{item.uom || '—'}</td>
                       <td className="px-4 py-3 border-t border-gray-100 text-sm text-gray-700">{item.pallet ?? '—'}</td>

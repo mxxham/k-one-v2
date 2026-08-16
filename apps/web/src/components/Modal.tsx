@@ -29,7 +29,7 @@ export default function Modal({ open, onClose, title, children, size = 'md' }: M
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/50 backdrop-blur-[2px] p-4">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/50 backdrop-blur-[2px] p-4">
       <div className={`bg-white rounded-xl shadow-2xl w-full ${SIZES[size]} my-8`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <h3 className="font-bold text-brand-800">{title}</h3>

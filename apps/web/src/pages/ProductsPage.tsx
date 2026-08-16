@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { Search, Plus, RefreshCw, Pencil, Box, Package, Layers, FileSpreadsheet } from 'lucide-react';
+import { Search, Plus, RefreshCw, Pencil, Box, Package, Layers, FileSpreadsheet, Gauge } from 'lucide-react';
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
 import { fmtNum } from '@/lib/format';
@@ -12,6 +12,7 @@ import Modal from '@/components/Modal';
 import Pagination from '@/components/Pagination';
 import ConfirmButton from '@/components/ConfirmButton';
 import { Field, TextInput, Select, TextArea, Grid } from '@/components/Field';
+import StatusBadge from '@/components/StatusBadge';
 
 interface Product {
   id: number;
@@ -29,6 +30,26 @@ interface Product {
   total_qty: number;
   total_drums: number;
   total_pallets: number;
+  velocity_class: string | null;
+}
+
+interface AbcRow {
+  product_id: number;
+  product_code: string | null;
+  product_name: string | null;
+  picked_qty: number;
+  cumulative_qty: number;
+  cumulative_share: number;
+  velocity_class: 'A' | 'B' | 'C' | null;
+}
+
+interface AbcResult {
+  rows: AbcRow[];
+  total_qty: number;
+  counts: { A: number; B: number; C: number; unclassified: number };
+  split: { a: number; b: number; c: number };
+  date_from: string;
+  date_to: string;
 }
 
 const PER_PAGE = 25;
@@ -63,6 +84,15 @@ export default function ProductsPage() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  const [abcOpen, setAbcOpen] = useState(false);
+  const [abcLoading, setAbcLoading] = useState(false);
+  const [abcRecomputing, setAbcRecomputing] = useState(false);
+  const [abc, setAbc] = useState<AbcResult | null>(null);
+  const [abcFrom, setAbcFrom] = useState('');
+  const [abcTo, setAbcTo] = useState('');
+  const [abcA, setAbcA] = useState('80');
+  const [abcB, setAbcB] = useState('15');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -159,6 +189,47 @@ export default function ProductsPage() {
   const set = (k: keyof typeof emptyForm) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
+  const abcParams = () => {
+    const p: Record<string, string> = {};
+    if (abcFrom) p.date_from = abcFrom;
+    if (abcTo) p.date_to = abcTo;
+    if (abcA) p.split_a = abcA;
+    if (abcB) p.split_b = abcB;
+    return p;
+  };
+
+  const runAbcAnalyze = async () => {
+    setAbcLoading(true);
+    try {
+      const res = await api('abc', 'analyze', { params: abcParams() });
+      setAbc(res as unknown as AbcResult);
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal menjalankan analisis ABC');
+    } finally {
+      setAbcLoading(false);
+    }
+  };
+
+  const runAbcRecompute = async () => {
+    setAbcRecomputing(true);
+    try {
+      const res = await api('abc', 'recompute', { params: abcParams() });
+      setAbc(res as unknown as AbcResult);
+      toast('success', 'Klasifikasi velocity_class berhasil diperbarui');
+      load();
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal recompute ABC');
+    } finally {
+      setAbcRecomputing(false);
+    }
+  };
+
+  const openAbc = () => {
+    setAbc(null);
+    setAbcOpen(true);
+    runAbcAnalyze();
+  };
+
   const uomCards = Object.entries(uomStats).map(([uom, count]) => ({
     label: uom || '—',
     value: count,
@@ -191,6 +262,14 @@ export default function ProductsPage() {
             >
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
+            {canAdmin && (
+              <button
+                onClick={openAbc}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-white text-sm font-semibold border border-white/20"
+              >
+                <Gauge className="w-4 h-4" /> ABC Analysis
+              </button>
+            )}
           </>
         }
       />
@@ -263,6 +342,7 @@ export default function ProductsPage() {
                     <th className="px-3 py-2.5 text-right font-bold">Max Trans</th>
                     <th className="px-3 py-2.5 text-right font-bold">Total Qty</th>
                     <th className="px-3 py-2.5 text-right font-bold">Pallet</th>
+                    <th className="px-3 py-2.5 text-center font-bold">Velocity</th>
                     <th className="px-3 py-2.5 text-center font-bold">Aksi</th>
                   </tr>
                 </thead>
@@ -282,6 +362,13 @@ export default function ProductsPage() {
                       <td className="px-3 py-2.5 text-right text-gray-600">{fmtNum(p.max_trans_qty, 0)}</td>
                       <td className="px-3 py-2.5 text-right font-semibold">{fmtNum(p.total_qty ?? p.total_drums, 0)}</td>
                       <td className="px-3 py-2.5 text-right font-semibold text-brand-600">{fmtNum(p.total_pallets, 0)}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        {p.velocity_class ? (
+                          <StatusBadge status={p.velocity_class} />
+                        ) : (
+                          <span className="text-[11px] text-gray-400">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center justify-center gap-1.5">
                           {canWrite && (
@@ -371,6 +458,98 @@ export default function ProductsPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={abcOpen} onClose={() => setAbcOpen(false)} title="ABC Analysis / Velocity Ranking" size="xl">
+        <div className="space-y-4">
+          <div className="flex items-end gap-3 flex-wrap">
+            <Field label="Dari Tanggal">
+              <TextInput type="date" value={abcFrom} onChange={(e) => setAbcFrom(e.target.value)} />
+            </Field>
+            <Field label="Sampai Tanggal">
+              <TextInput type="date" value={abcTo} onChange={(e) => setAbcTo(e.target.value)} />
+            </Field>
+            <Field label="Split A %">
+              <TextInput type="number" min="0" max="100" value={abcA} onChange={(e) => setAbcA(e.target.value)} className="w-24" />
+            </Field>
+            <Field label="Split B %">
+              <TextInput type="number" min="0" max="100" value={abcB} onChange={(e) => setAbcB(e.target.value)} className="w-24" />
+            </Field>
+            <button
+              onClick={runAbcAnalyze}
+              disabled={abcLoading}
+              className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 disabled:opacity-60"
+            >
+              {abcLoading ? 'Menganalisa…' : 'Analisa'}
+            </button>
+            {canAdmin && (
+              <button
+                onClick={runAbcRecompute}
+                disabled={abcRecomputing || abcLoading}
+                className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 disabled:opacity-60"
+              >
+                {abcRecomputing ? 'Menyimpan…' : 'Recompute & Simpan'}
+              </button>
+            )}
+          </div>
+
+          {abc && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="bg-red-50 rounded-xl border border-red-200 px-4 py-3">
+                  <div className="text-lg font-extrabold text-red-700">{fmtNum(abc.counts.A, 0)}</div>
+                  <div className="text-[11px] text-red-600 font-bold uppercase tracking-wide">A · {abc.split.a}%</div>
+                </div>
+                <div className="bg-amber-50 rounded-xl border border-amber-200 px-4 py-3">
+                  <div className="text-lg font-extrabold text-amber-700">{fmtNum(abc.counts.B, 0)}</div>
+                  <div className="text-[11px] text-amber-600 font-bold uppercase tracking-wide">B · {abc.split.b}%</div>
+                </div>
+                <div className="bg-gray-50 rounded-xl border border-gray-200 px-4 py-3">
+                  <div className="text-lg font-extrabold text-gray-700">{fmtNum(abc.counts.C, 0)}</div>
+                  <div className="text-[11px] text-gray-500 font-bold uppercase tracking-wide">C · {abc.split.c}%</div>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+                  <div className="text-lg font-extrabold text-gray-700">{fmtNum(abc.counts.unclassified, 0)}</div>
+                  <div className="text-[11px] text-gray-400 font-bold uppercase tracking-wide">Unclassified</div>
+                </div>
+                <div className="bg-brand-50 rounded-xl border border-brand-200 px-4 py-3">
+                  <div className="text-lg font-extrabold text-brand-700">{fmtNum(abc.total_qty, 0)}</div>
+                  <div className="text-[11px] text-brand-600 font-bold uppercase tracking-wide">Total Picked</div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-brand-50">
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-brand-700">
+                      <th className="px-3 py-2.5 font-bold">Product</th>
+                      <th className="px-3 py-2.5 text-right font-bold">Picked Qty</th>
+                      <th className="px-3 py-2.5 text-right font-bold">Cumulative</th>
+                      <th className="px-3 py-2.5 text-right font-bold">Cum %</th>
+                      <th className="px-3 py-2.5 text-center font-bold">Class</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {abc.rows.map((r, i) => (
+                      <tr key={i} className="hover:bg-brand-50/50">
+                        <td className="px-3 py-2">
+                          <div className="font-semibold text-brand-700">{r.product_code || '—'}</div>
+                          <div className="text-xs text-gray-500">{r.product_name}</div>
+                        </td>
+                        <td className="px-3 py-2 text-right">{fmtNum(r.picked_qty, 0)}</td>
+                        <td className="px-3 py-2 text-right">{fmtNum(r.cumulative_qty, 0)}</td>
+                        <td className="px-3 py-2 text-right">{(r.cumulative_share * 100).toFixed(1)}%</td>
+                        <td className="px-3 py-2 text-center">
+                          {r.velocity_class ? <StatusBadge status={r.velocity_class} /> : <span className="text-[11px] text-gray-400">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
       </Modal>
     </div>
   );

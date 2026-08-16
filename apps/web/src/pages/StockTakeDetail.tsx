@@ -18,6 +18,7 @@ import { useAuth } from '@/context/AuthContext';
 import { PageHeader } from '@/components/PageHeader';
 import { Card, EmptyState } from '@/components/Card';
 import StatusBadge from '@/components/StatusBadge';
+
 import Modal from '@/components/Modal';
 import Spinner from '@/components/Spinner';
 import ConfirmButton from '@/components/ConfirmButton';
@@ -454,7 +455,7 @@ export default function StockTakeDetail() {
                       </td>
                       <td className="px-3 py-2.5 border-t border-gray-100 text-sm text-gray-700">{item.batch_number || '—'}</td>
                       <td className="px-3 py-2.5 border-t border-gray-100 text-sm text-gray-700">{item.uom || '—'}</td>
-                      <td className="px-3 py-2.5 border-t border-gray-100 text-sm text-gray-700">{item.location || '—'}</td>
+                      <td className="px-3 py-2.5 border-t border-gray-100 text-sm font-mono text-gray-700">{item.location || '—'}</td>
                       <td className="px-3 py-2.5 border-t border-gray-100 text-sm text-gray-700 text-right">{fmtNum(item.qty_system)}</td>
                       <td className="px-3 py-2.5 border-t border-gray-100 text-right">
                         {counting ? (

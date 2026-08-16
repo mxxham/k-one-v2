@@ -15,6 +15,7 @@ import { InboundService } from '../inbound/inbound.service';
 import { OutboundService } from '../outbound/outbound.service';
 import { ReportService } from '../report/report.service';
 import { StockTakeService } from '../stocktake/stocktake.service';
+import { AsnService } from '../asn/asn.service';
 import { ApiException } from '../common/api-exception';
 import { todayStr } from '../common/date-util';
 
@@ -140,6 +141,7 @@ export class ExcelExportService {
     private readonly outbound: OutboundService,
     private readonly report: ReportService,
     private readonly stocktake: StockTakeService,
+    private readonly asn: AsnService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -930,6 +932,84 @@ export class ExcelExportService {
     for (let c = 1; c <= 12; c++) ws.getColumn(c).width = 18;
 
     const fileName = `StockTake_${String(stockTake.take_number ?? '')}_${String(stockTake.take_date ?? '').slice(0, 10).replace(/-/g, '')}`;
+    return { buffer: await toBuffer(wb), filename: `${fileName}_${nowStamp()}.xlsx`, contentType: XLSX_TYPE };
+  }
+
+  async asnReport(status: string | null): Promise<ExportFile> {
+    const asns = await this.asn.getAll(status, 2000, 0);
+    if (asns.length === 0) throw ApiException.badRequest('Tidak ada data ASN untuk di-export.');
+
+    const asnIds = asns.map((a) => Number(a.id));
+    const r = await this.db.query(
+      `SELECT ai.*, p.product_code, p.product_name, a.asn_number, a.supplier_name,
+              a.expected_arrival_date, a.status AS asn_status
+       FROM asn_items ai
+       JOIN products p ON ai.product_id = p.id
+       JOIN asn a ON ai.asn_id = a.id
+       WHERE ai.asn_id = ANY($1)
+       ORDER BY a.id, ai.id`,
+      [asnIds],
+    );
+    const items = r.rows;
+
+    const wb = new ExcelJS.Workbook();
+    const sheet = wb.addWorksheet('ASN Report');
+    const headerColor = '013D3C';
+    const subColor = '026766';
+
+    const headers = [
+      'No', 'ASN No', 'Supplier Name', 'Supplier Ref', 'Expected Arrival',
+      'Product Code', 'Product Name', 'Expected Qty', 'UOM', 'Batch / Lot', 'Exp. Date', 'ASN Status',
+    ];
+    const totalCols = headers.length;
+    const lastCol = colLetter(totalCols);
+
+    sheet.mergeCells(`A1:${lastCol}1`);
+    sheet.getCell('A1').value = `K-one — ASN Report   |   Dicetak: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })} ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} WIB   |   ${asns.length} ASN, ${items.length} item`;
+    sheet.getCell('A1').font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+    sheet.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${headerColor}` } };
+    sheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(1).height = 24;
+
+    headers.forEach((h, c) => {
+      const cell = sheet.getCell(2, c + 1);
+      cell.value = h;
+      cell.font = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${subColor}` } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = thinBorder();
+    });
+    sheet.getRow(2).height = 20;
+    sheet.views = [{ state: 'frozen', ySplit: 2 }];
+
+    let row = 3;
+    items.forEach((item, i) => {
+      const rowData = [
+        i + 1,
+        item.asn_number,
+        item.supplier_name ?? '',
+        item.supplier_reference ?? '',
+        fmtDate(item.expected_arrival_date),
+        item.product_code,
+        item.product_name,
+        nf(item.expected_qty),
+        item.uom ?? '',
+        item.batch_number ?? '',
+        fmtDate(item.exp_date),
+        item.asn_status ?? '',
+      ];
+      rowData.forEach((v, c) => {
+        const cell = sheet.getCell(row, c + 1);
+        cell.value = v as any;
+        cell.border = thinBorder();
+      });
+      row++;
+    });
+
+    const widths = [5, 16, 24, 16, 16, 14, 24, 12, 8, 14, 12, 12];
+    widths.forEach((w, c) => (sheet.getColumn(c + 1).width = w));
+
+    const fileName = `ASN_Report`;
     return { buffer: await toBuffer(wb), filename: `${fileName}_${nowStamp()}.xlsx`, contentType: XLSX_TYPE };
   }
 }
