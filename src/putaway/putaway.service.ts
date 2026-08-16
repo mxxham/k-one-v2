@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 import { ApiException } from '../common/api-exception';
+import { deriveUppFromPackSize } from '../common/pallet';
 
 const SPECIAL_LOCS = ['QUA_SHELL', 'STAGING', 'UNALLOCATED'];
 const LEVEL_HEIGHT: Record<string, number> = { A: 1, B: 2, C: 3, D: 4, E: 5 };
@@ -76,6 +77,7 @@ export class PutawayService {
     message: string;
     product: Record<string, any> | null;
     uom: string;
+    uom_per_pallet: number;
     limits: UomLimit | null;
     rule: PutawayRule | null;
     total_pallets: number;
@@ -84,7 +86,9 @@ export class PutawayService {
     const product = await this.getProduct(req.product_id);
     if (!product) throw ApiException.notFound('Produk tidak ditemukan.');
     const uom = (req.uom ?? product.uom_type ?? 'Drum').toUpperCase();
-    const upp = Math.max(1, Number(req.uom_per_pallet ?? product.uom_per_pallet ?? 4) || 4);
+    const derivedUpp = deriveUppFromPackSize(product.product_name);
+    const storedUpp = Math.max(1, Number(product.uom_per_pallet ?? 4) || 4);
+    const upp = Math.max(1, Number(req.uom_per_pallet ?? derivedUpp ?? storedUpp) || 4);
 
     const limits = await this.getUomLimit(uom);
     const rule = await this.getPutawayRule(req.product_id);
@@ -152,9 +156,11 @@ export class PutawayService {
       }
     }
 
-    // 2) Remainder / partial pallet -> pick face (Level A) when allowed.
+    // 2) Remainder / partial pallet (qty not reaching max SKU) -> pick face
+    //    (Level A). Per business rule, anything not reaching the max SKU qty
+    //    automatically becomes PICK_FAST; only full pallets go to bulk/reserve.
     if (remainder > 0) {
-      const targetLevel = req.force_level?.toUpperCase() ?? (pickAllowed ? PICK_LEVEL : reserveLevels[0]);
+      const targetLevel = req.force_level?.toUpperCase() ?? PICK_LEVEL;
       const targetZones = targetLevel === PICK_LEVEL ? pickZones : reserveZones;
       const slots = await this.findAvailable({ levels: [targetLevel], limit: 1, existingRacks, zones: targetZones, heavyOnly: limits.requires_equipment === 1 });
       const slot = slots[0];
@@ -173,6 +179,7 @@ export class PutawayService {
       message: success ? '' : `Hanya ${fullPallets - unassignedFull}/${fullPallets} lokasi full pallet tersedia di level ${reserveLevels.join('/')} — sisa diarahkan ke staging.`,
       product,
       uom,
+      uom_per_pallet: upp,
       limits,
       rule,
       total_pallets: placements.length,

@@ -58,7 +58,8 @@ export class InboundService {
               COUNT(DISTINCT ii.id)::int as total_items,
               SUM(ii.actual_qty) as total_qty,
               SUM(ii.pallet) as total_pallet,
-              STRING_AGG(DISTINCT ii.od_number, ', ' ORDER BY ii.od_number) as od_numbers
+              STRING_AGG(DISTINCT ii.od_number, ', ' ORDER BY ii.od_number) as od_numbers,
+              COUNT(*) FILTER (WHERE ii.cross_dock_outbound_order_id IS NOT NULL)::int as cross_dock_count
        FROM inbound_orders io
        LEFT JOIN users u ON io.created_by = u.id
        LEFT JOIN users r ON io.received_by = r.id
@@ -261,6 +262,23 @@ export class InboundService {
         const dist = palletDist(quantity, uomPerPallet);
         const palletLocs = dist.map((p) => ({ ...p, location_code: item.location }));
         await this.saveItemLocations(itemId, null, palletLocs, batchNumber, uom, dbc);
+      } else {
+        // No bin given -> auto-apply putaway recommendation so the item lands
+        // in bulk (full pallets) / PICK_FAST Level A (remainder) automatically.
+        const rec = await this.putaway.recommendLocations({
+          product_id: item.product_id,
+          quantity,
+          uom,
+        });
+        const suggested = (rec?.pallets ?? []).map((p) => ({
+          location_code: p.location_code,
+          pallet_seq: p.pallet_seq,
+          quantity: p.quantity,
+          is_full: p.is_full !== false,
+        }));
+        if (suggested.length > 0) {
+          await this.saveItemLocations(itemId, null, suggested, batchNumber, uom, dbc);
+        }
       }
     }
     return itemId;

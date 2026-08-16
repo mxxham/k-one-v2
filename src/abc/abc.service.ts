@@ -151,6 +151,26 @@ export class AbcService {
   }
 
   /**
+   * Freshness snapshot for the admin dashboard: how many products carry a persisted
+   * velocity_class and when the last recompute ran (NULL = never computed).
+   */
+  async status(): Promise<{ total: number; classified: number; unclassified: number; last_computed_at: string | null }> {
+    const r = await this.db.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(velocity_class)::int AS classified,
+              MAX(velocity_class_at) AS last_computed_at
+       FROM products`,
+    );
+    const row = r.rows[0];
+    return {
+      total: Number(row.total),
+      classified: Number(row.classified),
+      unclassified: Number(row.total) - Number(row.classified),
+      last_computed_at: row.last_computed_at ?? null,
+    };
+  }
+
+  /**
    * Admin-triggered recompute: writes velocity_class to every product.
    * Products with no OUT volume in range are left NULL (unclassified) rather than
    * being forced into C — absence of recent activity isn't the same as slow-moving.

@@ -32,6 +32,45 @@ export function getPalletCapacity(uom: string, custom: number | null = null): nu
   return map[uom] ?? 4;
 }
 
+/**
+ * Derive units-per-pallet (UPP) from a product's pack size embedded in the
+ * name/description, mirroring the live WMS putaway data (e.g. "12*0.8L" → 48,
+ * "12*1L" → 44, "4*4L" / "3*5L" → 36, "24*0.12L" → 80, "1*209L" → 4,
+ * "1*20L" → 24, "1*770kg" → 1). Returns null when the pack cannot be resolved.
+ */
+export function deriveUppFromPackSize(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const m = /(\d+)\s*\*\s*(\d+(?:\.\d+)?)\s*(l|kg)/i.exec(String(text));
+  if (!m) return null;
+  const qty = Number(m[1]);
+  const size = Number(m[2]);
+  const unit = m[3].toLowerCase();
+
+  if (unit === 'kg') {
+    if (size === 770) return 1; // fluid bag
+    if (size >= 100) return 4; // 180kg drum
+    if (size === 18 || size === 15) return 24; // pail
+    return null;
+  }
+  if (qty === 1) {
+    if (size >= 1000) return 1; // IBC tank
+    if (size >= 200) return 4; // 200/209L drum
+    if (size === 20) return 24; // 20L pail
+    return null;
+  }
+  if (qty === 12) {
+    if (size === 1) return 44; // 12*1L carton
+    if (size === 0.8 || size === 0.7 || size === 0.65) return 48; // 12*0.8L carton
+    return null;
+  }
+  if (qty === 4 && size === 4) return 36; // 4*4L carton
+  if (qty === 3 && size === 5) return 36; // 3*5L carton
+  if (qty === 24 && size === 0.12) return 80; // 24*0.12L carton
+  if (qty === 24 && size === 1) return 16; // 24*1L carton
+  if (qty === 10 && size === 0.25) return 100; // 10*0.25L carton
+  return null;
+}
+
 /** Product::getUomOptions */
 export function getUomOptions(uomType: string): number[] {
   const options: Record<string, number[]> = {

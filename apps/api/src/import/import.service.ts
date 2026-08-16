@@ -124,7 +124,7 @@ export class ImportService {
         row.product_id = Number(product.id);
         row.product_name = product.product_name;
         if (!row.uom) row.uom = product.uom_type ?? 'Drum';
-        row.uom_per_pallet = importUomPerPallet(row.uom, Number(product.uom_per_pallet ?? 4));
+        row.uom_per_pallet = importUomPerPallet(row.uom, Number(product.uom_per_pallet ?? 4), product.product_name);
         row.pallet = Math.ceil(row.quantity / row.uom_per_pallet);
       }
 
@@ -195,6 +195,45 @@ export class ImportService {
       autoLocations++;
     };
 
+    // Keep stock_locations in sync with the stock rows written below so the
+    // 3D rack map (putaway::bins) shows occupancy. If bin rows already exist
+    // for this stock (e.g. created by inbound), scale them to the new qty so
+    // pallet structure is preserved; otherwise create a single bin row.
+    const syncLocations = async (stockId: number, loc: string, qty: number, row: Q): Promise<void> => {
+      const l = loc.trim().toUpperCase();
+      if (l === '') return;
+      const isPickFace = l.length > 4 && l[4].toUpperCase() === 'A';
+      const isFull = Number(qty) >= Number(row.uom_per_pallet ?? 4) ? 1 : 0;
+      const status = row.stock_status === 'Reserved' ? 'Reserved' : 'Available';
+      const existingRows = await q(
+        `SELECT id, quantity FROM stock_locations WHERE stock_id=$1 ORDER BY pallet_seq, id`,
+        [stockId],
+      );
+      if (existingRows.rows.length > 0) {
+        const total = existingRows.rows.reduce((a: number, r: any) => a + Number(r.quantity), 0);
+        if (total > 0.001 && Math.abs(total - qty) > 0.001) {
+          const scale = qty / total;
+          for (const r of existingRows.rows) {
+            await q(
+              `UPDATE stock_locations SET quantity=$1, original_quantity=$1, is_full_pallet=$2, status=$3, updated_at=NOW() WHERE id=$4`,
+              [Number((Number(r.quantity) * scale).toFixed(4)), isFull, status, r.id],
+            );
+          }
+        }
+        await q(
+          `UPDATE stock_locations SET location_code=$1, batch_number=$2, updated_at=NOW() WHERE stock_id=$3`,
+          [l, row.batch_number || null, stockId],
+        );
+      } else {
+        await q(
+          `INSERT INTO stock_locations (stock_id, location_code, pallet_seq, quantity, original_quantity, uom,
+             is_full_pallet, batch_number, status, pallet_function)
+           VALUES ($1,$2,1,$3,$3,$4,$5,$6,$7,$8)`,
+          [stockId, l, qty, row.uom, isFull, row.batch_number || null, status, isPickFace ? 'PICK_FACE' : 'RESERVE'],
+        );
+      }
+    };
+
     for (const row of rows) {
       if ((row._errors?.length ?? 0) > 0) {
         skipped++;
@@ -210,10 +249,10 @@ export class ImportService {
           `INSERT INTO products (product_code, product_name, description, uom_type, uom_per_pallet,
              liters_per_unit, max_sku_qty, max_trans_qty, reorder_level, is_active)
            VALUES ($1,$2,$3,$4,$5,209.00,44,80,0,1) RETURNING id`,
-          [code, name, row.description || null, uomType, importUomPerPallet(uomType, 4)],
+          [code, name, row.description || null, uomType, importUomPerPallet(uomType, 4, name)],
         );
         row.product_id = Number(ins.rows[0].id);
-        row.uom_per_pallet = importUomPerPallet(uomType, 4);
+        row.uom_per_pallet = importUomPerPallet(uomType, 4, name);
         row.pallet = Math.ceil(row.quantity / row.uom_per_pallet);
         autoCreated++;
       }
@@ -235,6 +274,12 @@ export class ImportService {
         await q('UPDATE stock SET quantity=$1, pallet=$2, manufacture_date=$3, expiry_date=$4, uom=$5, updated_at=NOW() WHERE id=$6', [
           row.quantity, row.pallet ?? Math.ceil(row.quantity / 4), row.manufacture_date, row.expiry_date, row.uom, existing.id,
         ]);
+<<<<<<< HEAD
+=======
+        await syncLocations(existing.id, row.location ?? '', Number(row.quantity ?? 0), row);
+        const refNo = refPrefix + String(imported + 1).padStart(4, '0');
+        await this.addImportLedger(q, row, diff, refNo);
+>>>>>>> 3493489 ( KOV better inbound)
         imported++;
         continue;
       }
@@ -242,10 +287,17 @@ export class ImportService {
         const newQty = Number(existing.quantity ?? 0) + row.quantity;
         const newPlt = Math.ceil(newQty / (row.uom_per_pallet ?? 4));
         await q('UPDATE stock SET quantity=$1, pallet=$2, updated_at=NOW() WHERE id=$3', [newQty, newPlt, existing.id]);
+<<<<<<< HEAD
+=======
+        await syncLocations(existing.id, row.location ?? '', newQty, row);
+        const refNo = refPrefix + String(imported + 1).padStart(4, '0');
+        await this.addImportLedger(q, row, Number(row.quantity ?? 0), refNo);
+>>>>>>> 3493489 ( KOV better inbound)
         imported++;
         continue;
       }
       if (mode === 'skip' && existing) {
+        await syncLocations(existing.id, row.location ?? '', Number(existing.quantity ?? 0), row);
         skipped++;
         continue;
       }
@@ -259,6 +311,7 @@ export class ImportService {
           row.pallet ?? Math.ceil(row.quantity / 4), row.manufacture_date || null, row.expiry_date || null, row.stock_status,
         ],
       );
+      await syncLocations(Number(ins.rows[0].id), row.location ?? '', Number(row.quantity ?? 0), row);
 
       const refNo = refPrefix + String(imported + 1).padStart(4, '0');
       const bal = await q(`SELECT COALESCE(SUM(quantity),0) as bal FROM stock WHERE product_id=$1 AND stock_status='Available'`, [row.product_id]);
@@ -376,9 +429,9 @@ export class ImportService {
             `INSERT INTO products (product_code, product_name, description, uom_type, uom_per_pallet,
                liters_per_unit, max_sku_qty, max_trans_qty, reorder_level, is_active)
              VALUES ($1,$2,$3,$4,$5,209.00,44,80,0,1) RETURNING id`,
-            [newCode, newName, newName, uom, importUomPerPallet(uom, 4)],
+            [newCode, newName, newName, uom, importUomPerPallet(uom, 4, newName)],
           );
-          product = { id: Number(ins.rows[0].id), product_name: newName, uom_type: uom, uom_per_pallet: importUomPerPallet(uom, 4) };
+          product = { id: Number(ins.rows[0].id), product_name: newName, uom_type: uom, uom_per_pallet: importUomPerPallet(uom, 4, newName) };
           autoCreatedProduct = true;
           errorMessages.push(`Row ${rowNumber}: Product '${newCode}' dibuat otomatis`);
         }
@@ -411,7 +464,7 @@ export class ImportService {
           inboundId = Number(existing.rows[0].id);
         }
 
-        const uomPerPallet = importUomPerPallet(uom, Number(product.uom_per_pallet ?? 4));
+        const uomPerPallet = importUomPerPallet(uom, Number(product.uom_per_pallet ?? 4), product.product_name);
         const calculatedPallet = actualQty > 0 ? Math.ceil(actualQty / uomPerPallet) : 0;
         const finalPallet = pallet > 0 ? Math.floor(pallet) : calculatedPallet;
 
@@ -648,7 +701,7 @@ export class ImportService {
           }
 
           const uom = importNormalizeUom(salesUnit, product.uom_type);
-          const uomPerPallet = importUomPerPallet(uom, Number(product.uom_per_pallet));
+          const uomPerPallet = importUomPerPallet(uom, Number(product.uom_per_pallet), product.product_name);
           const pallet = Math.ceil(deliveryQty / uomPerPallet);
 
           const dKey = String(destName || '') + '|' + String(destLoc || '');
@@ -937,10 +990,10 @@ export class ImportService {
         `INSERT INTO products (product_code, product_name, description, uom_type, uom_per_pallet,
            liters_per_unit, max_sku_qty, max_trans_qty, reorder_level, is_active)
          VALUES ($1,$2,$3,$4,$5,209.00,44,80,0,1) RETURNING id`,
-        [code, name, row.description || null, uomType, importUomPerPallet(uomType, 4)],
+        [code, name, row.description || null, uomType, importUomPerPallet(uomType, 4, name)],
       );
       row.product_id = Number(ins.rows[0].id);
-      row.uom_per_pallet = importUomPerPallet(uomType, 4);
+      row.uom_per_pallet = importUomPerPallet(uomType, 4, name);
       row.pallet = Math.ceil(row.quantity / Math.max(1, row.uom_per_pallet));
       row._auto_create = false;
       created++;

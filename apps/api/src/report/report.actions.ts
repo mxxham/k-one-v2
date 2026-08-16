@@ -93,8 +93,9 @@ export class ReportActions {
   // ---------------------------------------------------------------------------
   private async activityList(ctx: RequestContext): Promise<Q> {
     const module = ctx.query.module ? String(ctx.query.module) : null;
+    const action = ctx.query.action ? String(ctx.query.action) : null;
     const limit = Number.parseInt(ctx.query.limit ?? '200', 10) || 200;
-    return { rows: await this.report.activityLogList(module, limit) };
+    return { rows: await this.report.activityLogList(module, action, limit) };
   }
 
   private async activityModules(_ctx: RequestContext): Promise<Q> {

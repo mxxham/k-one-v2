@@ -435,12 +435,16 @@ export class ReportService {
   // Activity Log
   // ---------------------------------------------------------------------------
 
-  async activityLogList(module: string | null, limit: number): Promise<any[]> {
+  async activityLogList(module: string | null, action: string | null, limit: number): Promise<any[]> {
     let sql = 'SELECT al.* FROM activity_log al WHERE 1=1';
     const params: unknown[] = [];
     if (module) {
       params.push(module);
       sql += ` AND al.module = $${params.length}`;
+    }
+    if (action) {
+      params.push(action);
+      sql += ` AND al.action = $${params.length}`;
     }
     sql += ' ORDER BY al.id DESC LIMIT ' + Math.max(0, Math.floor(limit));
     const r = await this.db.query(sql, params);
@@ -506,6 +510,8 @@ export class ReportService {
       'activity_log',
       'stock_ledger',
       'outbound_item_locations',
+      'wave_orders',
+      'waves',
       'picklist_items',
       'picklists',
       'location_allocations',

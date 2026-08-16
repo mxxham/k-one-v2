@@ -18,9 +18,11 @@ export class AbcActions {
   ) {
     registerActions('abc', {
       analyze: (c) => this.analyze(c),
+      status: (c) => this.status(c),
       recompute: (c) => this.recompute(c),
     });
     setPermission('abc', 'recompute', 'admin');
+    setPermission('abc', 'status', 'admin');
     setModuleDepartments('abc', ['all']);
   }
 
@@ -32,6 +34,10 @@ export class AbcActions {
     const q = ctx.query;
     const result = await this.abc.analyze(q.date_from, q.date_to, q.split_a, q.split_b);
     return result;
+  }
+
+  private async status(_ctx: RequestContext): Promise<Q> {
+    return this.abc.status();
   }
 
   private async recompute(ctx: RequestContext): Promise<Q> {

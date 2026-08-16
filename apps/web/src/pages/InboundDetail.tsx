@@ -1,6 +1,10 @@
 ﻿import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+<<<<<<< HEAD
 import { ArrowLeft, Plus, Trash2, Edit3, CalendarDays, Boxes, MapPin, Layers, ChevronRight, Printer, ClipboardList } from 'lucide-react';
+=======
+import { ArrowLeft, Plus, Trash2, Edit3, CalendarDays, Boxes, MapPin, Layers, ChevronRight, Printer, ClipboardList, AlertTriangle, Sparkles } from 'lucide-react';
+>>>>>>> 3493489 ( KOV better inbound)
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
 import { fmtDate, fmtNum, todayISO } from '@/lib/format';
@@ -288,6 +292,8 @@ export default function InboundDetail() {
 
   const [palletItem, setPalletItem] = useState<ItemDetail | null>(null);
   const [palletRows, setPalletRows] = useState<PalletRow[]>([]);
+  const [palletSuggesting, setPalletSuggesting] = useState(false);
+  const [palletSuggestMsg, setPalletSuggestMsg] = useState('');
 
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [addItem, setAddItem] = useState<AddItemForm>({
@@ -304,6 +310,8 @@ export default function InboundDetail() {
     in_process_status: 'Dues In',
   });
   const [addLocations, setAddLocations] = useState<AddLocRow[]>([]);
+  const [addSuggesting, setAddSuggesting] = useState(false);
+  const [addSuggestMsg, setAddSuggestMsg] = useState('');
 
   const fetchDetail = useCallback(async () => {
     if (!id) return;
@@ -445,7 +453,61 @@ export default function InboundDetail() {
     );
   };
 
+<<<<<<< HEAD
   const openPalletModal = (item: ItemDetail) => {
+=======
+  // Phase 2 — scanner-first putaway: validates the scanned product matches the
+  // expected item (next in Dues In/Goods Received that still needs putaway).
+  const putawayTarget = data?.items.find((it) => it.in_process_status === 'Dues In' || it.in_process_status === 'Goods Received') ?? null;
+
+  const handleScan = async (code: string) => {
+    setScanErr(null);
+    setScanMatchId(null);
+    setOverrideReason('');
+    let res: any;
+    try {
+      res = await api('stock', 'scan', { params: { code } });
+    } catch (err: any) {
+      setScanErr(err.message || 'Gagal membaca kode');
+      return;
+    }
+    if (!res?.found) {
+      setScanErr(`Kode '${code}' tidak dikenali (product tidak ditemukan).`);
+      return;
+    }
+    const scannedCode = res.product?.product_code || code;
+    const expectedCode = putawayTarget?.product_code || '';
+    if (putawayTarget && expectedCode && scannedCode === expectedCode) {
+      setScanMatchId(putawayTarget.id);
+      toast('success', `${scannedCode} cocok — ${putawayTarget.product_name || ''}`);
+    } else {
+      setScanCode(code);
+      setScanErr(
+        `Kode '${scannedCode}' tidak cocok dengan item yang diproses${expectedCode ? ` '${expectedCode}'` : ' (tidak ada item yang perlu putaway)'}.`,
+      );
+    }
+  };
+
+  const handleOverride = async () => {
+    if (!overrideReason.trim()) {
+      toast('error', 'Alasan override wajib diisi');
+      return;
+    }
+    try {
+      await api('stock', 'scan_override', {
+        method: 'POST',
+        body: { code: scanCode, reason: overrideReason.trim(), context: `inbound:${order?.order_number || ''}` },
+      });
+      setScanErr(null);
+      setOverrideReason('');
+      toast('success', 'Override dicatat');
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal menyimpan override');
+    }
+  };
+
+  const openPalletModal = async (item: ItemDetail) => {
+>>>>>>> 3493489 ( KOV better inbound)
     const existing = item.pallet_locations && item.pallet_locations.length ? item.pallet_locations : [{ pallet_seq: 1, location_code: '', quantity: 0 }];
     setPalletRows(
       existing.map((r) => ({
@@ -456,6 +518,68 @@ export default function InboundDetail() {
       })),
     );
     setPalletItem(item);
+    setPalletSuggestMsg('');
+    const hasSaved = existing.some((r) => r.location_code && String(r.location_code).trim());
+    if (!hasSaved && !item.cross_dock_outbound_order_id && item.product_id) {
+      setPalletSuggesting(true);
+      try {
+        const res: any = await api('putaway', 'recommend', {
+          params: { product_id: item.product_id, quantity: item.quantity, uom: item.uom },
+        });
+        if (res?.pallets?.length) {
+          setPalletRows(
+            res.pallets.map((p: any) => ({
+              pallet_seq: p.pallet_seq,
+              location_code: p.location_code || '',
+              quantity: String(p.quantity ?? ''),
+              is_full: p.is_full !== false,
+            })),
+          );
+        }
+        setPalletSuggestMsg(putawayMsg(res, `Saran lokasi putaway: ${res?.pallets?.length ?? 0} pallet.`));
+      } catch (e: any) {
+        setPalletSuggestMsg(e.message || 'Gagal mendapat saran lokasi putaway.');
+      } finally {
+        setPalletSuggesting(false);
+      }
+    }
+  };
+  const putawayMsg = (res: any, fallback: string): string => {
+    if (res?.message) return res.message;
+    const upp = Number(res?.uom_per_pallet ?? 0);
+    const n = res?.pallets?.length ?? 0;
+    if (!upp || n === 0) return fallback;
+    const full = res.pallets.filter((p: any) => p.is_full).length;
+    const rem = res.pallets.find((p: any) => !p.is_full)?.quantity;
+    const parts: string[] = [];
+    if (full > 0) parts.push(`${full} pallet penuh @ ${upp} pcs`);
+    if (rem && Number(rem) > 0) parts.push(`sisa ${rem} pcs ke pick-face`);
+    return `Saran putaway: ${parts.join(', ')} (${n} lokasi).`;
+  };
+  const suggestPallet = async () => {
+    if (!palletItem?.product_id) return;
+    setPalletSuggesting(true);
+    setPalletSuggestMsg('');
+    try {
+      const res: any = await api('putaway', 'recommend', {
+        params: { product_id: palletItem.product_id, quantity: palletItem.quantity, uom: palletItem.uom },
+      });
+      if (res?.pallets?.length) {
+        setPalletRows(
+          res.pallets.map((p: any) => ({
+            pallet_seq: p.pallet_seq,
+            location_code: p.location_code || '',
+            quantity: String(p.quantity ?? ''),
+            is_full: p.is_full !== false,
+          })),
+        );
+      }
+      setPalletSuggestMsg(putawayMsg(res, 'Saran lokasi putaway diperbarui.'));
+    } catch (e: any) {
+      setPalletSuggestMsg(e.message || 'Gagal mendapat saran lokasi putaway.');
+    } finally {
+      setPalletSuggesting(false);
+    }
   };
   const updatePalletRow = (i: number, patch: Partial<PalletRow>) =>
     setPalletRows((arr) => arr.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -550,6 +674,37 @@ export default function InboundDetail() {
   const updateAddLoc = (i: number, patch: Partial<AddLocRow>) =>
     setAddLocations((arr) => arr.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   const removeAddLoc = (i: number) => setAddLocations((arr) => arr.filter((_, idx) => idx !== i));
+  const suggestAddLocations = async () => {
+    if (!addItem.product_id) {
+      toast('error', 'Pilih produk terlebih dahulu');
+      return;
+    }
+    if (!Number(addItem.quantity)) {
+      toast('error', 'Quantity wajib diisi');
+      return;
+    }
+    setAddSuggesting(true);
+    setAddSuggestMsg('');
+    try {
+      const params: Record<string, string | number> = { product_id: addItem.product_id, quantity: Number(addItem.quantity) };
+      if (addItem.uom) params.uom = addItem.uom;
+      const res: any = await api('putaway', 'recommend', { params });
+      if (res?.pallets?.length) {
+        setAddLocations(
+          res.pallets.map((p: any) => ({
+            location_code: p.location_code || '',
+            quantity: String(p.quantity ?? ''),
+            is_full: p.is_full !== false,
+          })),
+        );
+      }
+      setAddSuggestMsg(putawayMsg(res, `Saran lokasi putaway: ${res?.pallets?.length ?? 0} pallet.`));
+    } catch (e: any) {
+      setAddSuggestMsg(e.message || 'Gagal mendapat saran lokasi putaway.');
+    } finally {
+      setAddSuggesting(false);
+    }
+  };
   if (loading) return <Spinner label="Loading detail..." />;
   if (!data) return <EmptyState message="Data tidak ditemukan" />;
 
@@ -560,6 +715,14 @@ export default function InboundDetail() {
   const editable = canWrite && !isDone;
 
   const palletCount = (item: ItemDetail) => data.item_pallet_counts?.[String(item.id)] ?? item.pallet ?? 0;
+
+  // Each item with saved pallet locations renders as ONE row per pallet/location
+  // (same product repeated) — mirroring the spreadsheet's per-bin item rows.
+  const displayRows: { item: ItemDetail; pallet: PalletLocation | null }[] = data.items.flatMap((item): { item: ItemDetail; pallet: PalletLocation | null }[] => {
+    const locs = (item.pallet_locations ?? []).filter((l) => l.location_code && String(l.location_code).trim());
+    if (locs.length === 0) return [{ item, pallet: null }];
+    return locs.map((pallet) => ({ item, pallet }));
+  });
 
 const headerActions = (
     <div className="flex items-center gap-2 flex-wrap">
@@ -673,7 +836,7 @@ const headerActions = (
       </Card>
 
       <Card
-        title={`Items (${data.items.length})`}
+        title={`Items (${displayRows.length})`}
         actions={
           editable ? (
             <button
@@ -710,6 +873,7 @@ const headerActions = (
                 </tr>
               </thead>
               <tbody>
+<<<<<<< HEAD
                 {data.items.map((item) => (
                   <tr key={item.id} className="border-t border-gray-100 hover:bg-brand-50 transition-colors">
                     <td className="px-3 py-2.5">
@@ -770,6 +934,85 @@ const headerActions = (
                     </td>
                   </tr>
                 ))}
+=======
+                {displayRows.map((row) => {
+                  const item = row.item;
+                  const pallet = row.pallet;
+                  const rowQty = pallet ? Number(pallet.quantity ?? 0) : Number(item.quantity ?? 0);
+                  const rowLoc = pallet ? pallet.location_code : (item.location || '—');
+                  return (
+                    <tr key={`${item.id}-${pallet ? pallet.pallet_seq : 0}`} className={`border-t border-gray-100 transition-colors ${scanMatchId === item.id ? 'bg-emerald-50 ring-2 ring-inset ring-emerald-300' : 'hover:bg-brand-50'}`}>
+                      <td className="px-3 py-2.5">
+                        <div className="font-semibold text-gray-800">{item.product_code}</div>
+                        <div className="text-[11px] text-gray-500 truncate max-w-[180px]">{item.product_name || ''}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-600">{item.od_number || '—'}</td>
+                      <td className="px-3 py-2.5 text-gray-600">{item.so_number || '—'}</td>
+                      <td className="px-3 py-2.5 text-gray-600">{item.batch_number || '—'}</td>
+                      <td className="px-3 py-2.5 text-gray-600">{item.pallet_no || (pallet ? `Pallet ${pallet.pallet_seq}` : '—')}</td>
+                      <td className="px-3 py-2.5 text-gray-700 font-medium text-right">{fmtNum(rowQty, 0)}</td>
+                      <td className="px-3 py-2.5 text-gray-600">{item.uom || '—'}</td>
+                      <td className="px-3 py-2.5 text-gray-700 font-medium text-right">{fmtNum(rowQty, 0)}</td>
+                      <td className="px-3 py-2.5 text-gray-700 font-medium text-right">{pallet ? 1 : fmtNum(palletCount(item), 0)}</td>
+                      <td className="px-3 py-2.5 font-mono text-xs text-gray-700">
+                        {item.cross_dock_outbound_order_id ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-2 py-0.5">
+                              <ClipboardList className="w-3 h-3" /> CROSS-DOCK
+                            </span>
+                            <span className="text-[11px] text-violet-700">→ {item.cross_dock_order_number || item.cross_dock_outbound_order_id} @ STAGING</span>
+                          </div>
+                        ) : (
+                          rowLoc
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-600">{fmtDate(item.manufacture_date)}</td>
+                      <td className="px-3 py-2.5 text-gray-600">{fmtDate(item.exp_date)}</td>
+                      <td className="px-3 py-2.5">
+                        <ItemStatusPill status={item.in_process_status} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <StatusBadge status={item.stock_status} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {editable ? (
+                          <div className="flex items-center gap-1 flex-wrap justify-end">
+                            <ActionBtn title="Edit Qty" onClick={() => openEditQty(item)}>
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </ActionBtn>
+                            <ActionBtn title="Edit Dates" onClick={() => openEditDates(item)}>
+                              <CalendarDays className="w-3.5 h-3.5" />
+                            </ActionBtn>
+                            <ActionBtn title="Update Pallet No" onClick={() => openPalletNo(item)}>
+                              <Boxes className="w-3.5 h-3.5" />
+                            </ActionBtn>
+                            <ActionBtn title="Assign Location" onClick={() => openLoc(item)}>
+                              <MapPin className="w-3.5 h-3.5" />
+                            </ActionBtn>
+                            <ActionBtn title="Manage Pallet Locations" onClick={() => openPalletModal(item)}>
+                              <Layers className="w-3.5 h-3.5" />
+                            </ActionBtn>
+                            <Select
+                              value={item.in_process_status || ''}
+                              onChange={(e) => updateItemStatus(item, e.target.value)}
+                              className="!w-32 !py-1 !px-2 text-xs"
+                            >
+                              {ITEM_STATUSES.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </Select>
+                            <ConfirmButton label="Delete" confirmText="Hapus item ini?" onConfirm={() => deleteItem(item)} />
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-gray-400">View only</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+>>>>>>> 3493489 ( KOV better inbound)
               </tbody>
             </table>
           </div>
@@ -942,13 +1185,24 @@ const headerActions = (
                 </div>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={addPalletRow}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand-50 text-brand-700 border border-brand-200 hover:bg-brand-100"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add Row
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={addPalletRow}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand-50 text-brand-700 border border-brand-200 hover:bg-brand-100"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Row
+              </button>
+              <button
+                type="button"
+                onClick={suggestPallet}
+                disabled={palletSuggesting || !palletItem?.product_id}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 disabled:opacity-50"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> {palletSuggesting ? 'Mencari...' : 'Saran Lokasi (Putaway)'}
+              </button>
+            </div>
+            {palletSuggestMsg && <div className="text-xs text-gray-500">{palletSuggestMsg}</div>}
             <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">
               <button onClick={() => setPalletItem(null)} className="px-4 py-2 text-sm rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 font-semibold">
                 Batal
@@ -1033,13 +1287,24 @@ const headerActions = (
                 </div>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={() => setAddLocations((arr) => [...arr, { location_code: '', quantity: '', is_full: true }])}
-              className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand-50 text-brand-700 border border-brand-200 hover:bg-brand-100"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add Row
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAddLocations((arr) => [...arr, { location_code: '', quantity: '', is_full: true }])}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand-50 text-brand-700 border border-brand-200 hover:bg-brand-100"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Row
+              </button>
+              <button
+                type="button"
+                onClick={suggestAddLocations}
+                disabled={addSuggesting}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 disabled:opacity-50"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> {addSuggesting ? 'Mencari...' : 'Saran Lokasi (Putaway)'}
+              </button>
+            </div>
+            {addSuggestMsg && <div className="text-xs text-gray-500">{addSuggestMsg}</div>}
           </div>
 
           <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">

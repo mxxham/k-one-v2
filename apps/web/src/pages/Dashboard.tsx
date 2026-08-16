@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Warehouse, Droplets, Boxes, Timer, AlertTriangle, ArrowDownToLine,
+<<<<<<< HEAD
   PackageOpen, Truck, MapPin,
+=======
+  PackageOpen, Truck, MapPin, Plus, FileText, ClipboardCheck, TrendingUp, TrendingDown,
+  BarChart3, RefreshCw,
+>>>>>>> 3493489 ( KOV better inbound)
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
@@ -10,7 +15,15 @@ import { Card, EmptyState } from '@/components/Card';
 import Modal from '@/components/Modal';
 import Spinner from '@/components/Spinner';
 import StatusBadge from '@/components/StatusBadge';
+<<<<<<< HEAD
 import { fmtNum, fmtDate, expiryInfo } from '@/lib/format';
+=======
+
+import { fmtNum, fmtDate, fmtDateTime, expiryInfo } from '@/lib/format';
+import DashboardAlerts from '@/components/dashboard/DashboardAlerts';
+import FefoPriorityQueue from '@/components/dashboard/FefoPriorityQueue';
+import SmartInsights from '@/components/dashboard/SmartInsights';
+>>>>>>> 3493489 ( KOV better inbound)
 
 function greeting(name: string) {
   const h = new Date().getHours();
@@ -30,11 +43,20 @@ function expiryCell(v?: string | null) {
   return <span className={cls[info.level]}>{info.text}</span>;
 }
 
+function safeJson(v: any): any {
+  if (!v) return null;
+  try {
+    return typeof v === 'string' ? JSON.parse(v) : v;
+  } catch {
+    return null;
+  }
+}
+
 const TH = 'px-3 py-2.5 font-bold whitespace-nowrap';
 const TD = 'px-3 py-2.5 whitespace-nowrap';
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user, canAdmin } = useAuth();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -42,6 +64,12 @@ export default function Dashboard() {
   const [aisle, setAisle] = useState<string | null>(null);
   const [aisleDetail, setAisleDetail] = useState<any>(null);
   const [aisleLoading, setAisleLoading] = useState(false);
+  const [scanRows, setScanRows] = useState<any[]>([]);
+  const [scanLoading, setScanLoading] = useState(true);
+  const [scanError, setScanError] = useState('');
+  const [abcStatus, setAbcStatus] = useState<any>(null);
+  const [abcLoading, setAbcLoading] = useState(true);
+  const [abcError, setAbcError] = useState('');
   const reqId = useRef(0);
 
   useEffect(() => {
@@ -57,10 +85,37 @@ export default function Dashboard() {
       .finally(() => {
         if (alive && id === reqId.current) setLoading(false);
       });
+
+    if (canAdmin) {
+      api('activitylog', 'list', { params: { module: 'stock', action: 'SCAN_OVERRIDE', limit: 10 } })
+        .then((l: any) => {
+          if (alive && id === reqId.current) setScanRows((l.rows || []).slice(0, 10));
+        })
+        .catch((e: any) => {
+          if (alive && id === reqId.current) setScanError(e.message || 'Gagal memuat scan override');
+        })
+        .finally(() => {
+          if (alive && id === reqId.current) setScanLoading(false);
+        });
+
+      api('abc', 'status')
+        .then((s: any) => {
+          if (alive && id === reqId.current) setAbcStatus(s);
+        })
+        .catch((e: any) => {
+          if (alive && id === reqId.current) setAbcError(e.message || 'Gagal memuat status ABC');
+        })
+        .finally(() => {
+          if (alive && id === reqId.current) setAbcLoading(false);
+        });
+    } else {
+      setScanLoading(false);
+      setAbcLoading(false);
+    }
     return () => {
       alive = false;
     };
-  }, []);
+  }, [canAdmin]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -103,6 +158,9 @@ export default function Dashboard() {
     1,
     ...monthly.map((m: any) => Math.max(Number(m.inbound_qty) || 0, Number(m.outbound_qty) || 0)),
   );
+
+  const abcLast = abcStatus?.last_computed_at ? new Date(abcStatus.last_computed_at).getTime() : 0;
+  const abcStale = !abcLast || Date.now() - abcLast > 30 * 24 * 60 * 60 * 1000;
 
   return (
     <div>
@@ -274,6 +332,104 @@ export default function Dashboard() {
               )}
             </Card>
           </div>
+
+          {canAdmin && (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
+              <Card
+                title="Recent Scan Overrides"
+                actions={
+                  <Link to="/activity-log" className="text-xs font-semibold text-brand-600 hover:underline">
+                    Lihat semua
+                  </Link>
+                }
+              >
+                {scanLoading ? (
+                  <Spinner label="Memuat scan override..." />
+                ) : scanError ? (
+                  <div className="px-4 py-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">{scanError}</div>
+                ) : scanRows.length === 0 ? (
+                  <EmptyState message="Belum ada scan override" />
+                ) : (
+                  <div className="overflow-x-auto -mx-5 px-5">
+                    <table className="w-full text-sm">
+                      <thead className="bg-brand-50">
+                        <tr className="text-left text-[11px] uppercase tracking-wide text-brand-700">
+                          <th className={TH}>Waktu</th>
+                          <th className={TH}>Operator</th>
+                          <th className={TH}>Kode</th>
+                          <th className={TH}>Alasan</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {scanRows.map((r: any) => {
+                          const oldV = safeJson(r.old_value) || {};
+                          const newV = safeJson(r.new_value) || {};
+                          return (
+                            <tr key={r.id} className="hover:bg-brand-50 transition-colors">
+                              <td className={`${TD} text-xs text-gray-500`}>{fmtDateTime(r.created_at)}</td>
+                              <td className={`${TD} font-semibold`}>{r.full_name || r.username || '—'}</td>
+                              <td className={`${TD} font-mono text-xs`}>{oldV.scanned || '—'}</td>
+                              <td className={TD}>{newV.reason || '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+
+              <Card title="ABC Analysis — Status ABC">
+                {abcLoading ? (
+                  <Spinner label="Memuat status ABC..." />
+                ) : abcError ? (
+                  <div className="px-4 py-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">{abcError}</div>
+                ) : abcStatus ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-2xl font-extrabold">
+                          {fmtNum(abcStatus.classified, 0)}
+                          <span className="text-sm text-gray-400 font-semibold"> / {fmtNum(abcStatus.total, 0)}</span>
+                        </div>
+                        <div className="text-[11px] uppercase tracking-wide text-gray-500 mt-0.5">Produk Terklasifikasi</div>
+                      </div>
+                      <BarChart3 className="w-8 h-8 text-brand-500 opacity-80" />
+                    </div>
+                    <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-brand-500 to-brand-300"
+                        style={{ width: `${abcStatus.total > 0 ? Math.round((abcStatus.classified / abcStatus.total) * 100) : 0}%` }}
+                      />
+                    </div>
+                    {abcStatus.last_computed_at ? (
+                      <div className={`text-sm flex items-center gap-2 ${abcStale ? 'text-orange-600' : 'text-emerald-600'}`}>
+                        <span
+                          className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold ${abcStale ? 'bg-orange-100 text-orange-700' : 'bg-emerald-100 text-emerald-700'}`}
+                        >
+                          {abcStale ? 'Usang' : 'Terkini'}
+                        </span>
+                        Terakhir dihitung: {fmtDateTime(abcStatus.last_computed_at)}
+                      </div>
+                    ) : (
+                      <div className="text-sm flex items-center gap-2 text-orange-600">
+                        <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold bg-orange-100 text-orange-700">Belum dihitung</span>
+                        Klasifikasi ABC belum pernah dijalankan.
+                      </div>
+                    )}
+                    <Link
+                      to="/products"
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-semibold hover:bg-brand-700 transition"
+                    >
+                      <RefreshCw className="w-4 h-4" /> Kelola di halaman Produk
+                    </Link>
+                  </div>
+                ) : (
+                  <EmptyState message="Tidak ada data ABC" />
+                )}
+              </Card>
+            </div>
+          )}
 
           {/* Stock summary */}
           <Card title="Stock Summary">

@@ -1,5 +1,9 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
+<<<<<<< HEAD
 import { Plus, RefreshCw, Pencil, Layers, FlaskConical, Box, Trash2 } from 'lucide-react';
+=======
+import { Plus, RefreshCw, Pencil, Layers, FlaskConical, Box, Trash2, Route, AlertTriangle } from 'lucide-react';
+>>>>>>> 3493489 ( KOV better inbound)
 import { api } from '@/lib/api';
 import { fmtNum } from '@/lib/format';
 import { useToast } from '@/components/Toast';
@@ -9,6 +13,10 @@ import { Card, EmptyState } from '@/components/Card';
 import Spinner from '@/components/Spinner';
 import Modal from '@/components/Modal';
 import { Field, TextInput, Select, Grid } from '@/components/Field';
+<<<<<<< HEAD
+=======
+import { ZONE_COLORS } from '@/components/Rack3D';
+>>>>>>> 3493489 ( KOV better inbound)
 
 const LEVELS = ['A', 'B', 'C', 'D', 'E'];
 
@@ -57,6 +65,20 @@ interface ProductOption {
   uom_type: string;
 }
 
+<<<<<<< HEAD
+=======
+interface ZoneAisleRow {
+  id: number;
+  zone_code: string;
+  zone_name: string;
+  zone_type: string;
+  aisle: string;
+  min_level: string;
+  max_level: string;
+  is_active: number;
+}
+
+>>>>>>> 3493489 ( KOV better inbound)
 const emptyUom = { uom_type: 'Drum', min_level: 'A', max_level: 'E', allow_pick_face: 1, max_weight_kg: '', max_height_cm: '', requires_equipment: 0 };
 const emptyZone = { zone_code: '', zone_name: '', zone_type: 'RESERVE', priority: 10, is_active: 1 };
 const emptyRule = {
@@ -74,7 +96,11 @@ export default function ZoningPage() {
   const toast = useToast();
   const { canWrite } = useAuth();
 
+<<<<<<< HEAD
   const [tab, setTab] = useState<'uom' | 'product' | 'zone'>('uom');
+=======
+  const [tab, setTab] = useState<'uom' | 'product' | 'zone' | 'zoneaisles'>('uom');
+>>>>>>> 3493489 ( KOV better inbound)
 
   const [uomLimits, setUomLimits] = useState<UomLimitRow[]>([]);
   const [productRules, setProductRules] = useState<ProductRuleRow[]>([]);
@@ -82,7 +108,12 @@ export default function ZoningPage() {
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [loading, setLoading] = useState(true);
 
+<<<<<<< HEAD
   // modals
+=======
+  const [zoneAisles, setZoneAisles] = useState<ZoneAisleRow[]>([]);
+
+>>>>>>> 3493489 ( KOV better inbound)
   const [uomModal, setUomModal] = useState(false);
   const [uomForm, setUomForm] = useState(emptyUom);
   const [zoneModal, setZoneModal] = useState(false);
@@ -117,6 +148,69 @@ export default function ZoningPage() {
     load();
   }, [load]);
 
+<<<<<<< HEAD
+=======
+  const loadZoneAisles = useCallback(async () => {
+    try {
+      const res = await api('putaway', 'zone_aisles');
+      setZoneAisles((res.rows || []) as ZoneAisleRow[]);
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal memuat binding zone-aisle');
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (tab === 'zoneaisles') loadZoneAisles();
+  }, [tab, loadZoneAisles]);
+
+  const openZaEdit = (z?: ZoneAisleRow) => {
+    setEditingZa(z || null);
+    setZaForm(
+      z
+        ? { zone_code: z.zone_code, aisle: z.aisle, min_level: z.min_level, max_level: z.max_level, is_active: Number(z.is_active) }
+        : emptyZoneAisle,
+    );
+    setZaModal(true);
+  };
+
+  const saveZa = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!zaForm.zone_code || !zaForm.aisle) {
+      toast('error', 'Zone dan aisle wajib diisi');
+      return;
+    }
+    if (LEVELS.indexOf(zaForm.min_level) > LEVELS.indexOf(zaForm.max_level)) {
+      toast('error', 'min_level tidak boleh lebih tinggi dari max_level');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api('putaway', 'save_zone_aisle', {
+        method: 'POST',
+        body: { id: editingZa?.id, ...zaForm },
+      });
+      toast('success', 'Binding zone-aisle tersimpan');
+      setZaModal(false);
+      loadZoneAisles();
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal menyimpan');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteZa = async (z: ZoneAisleRow) => {
+    if (!window.confirm(`Hapus binding ${z.zone_code} · ${z.aisle}?`)) return;
+    try {
+      await api('putaway', 'delete_zone_aisle', { method: 'POST', body: { id: z.id } });
+      toast('success', 'Binding dihapus');
+      loadZoneAisles();
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal menghapus');
+    }
+  };
+
+>>>>>>> 3493489 ( KOV better inbound)
   // ---------------------------------------------------------------- UOM limits
   const openUomEdit = (row?: UomLimitRow) => {
     setUomForm(
@@ -270,6 +364,10 @@ export default function ZoningPage() {
     { key: 'uom' as const, label: 'UOM Level Limits', icon: FlaskConical },
     { key: 'product' as const, label: 'Produk & Putaway Rules', icon: Box },
     { key: 'zone' as const, label: 'Zones', icon: Layers },
+<<<<<<< HEAD
+=======
+    { key: 'zoneaisles' as const, label: 'Zone Aisles', icon: Route },
+>>>>>>> 3493489 ( KOV better inbound)
   ];
 
   return (
@@ -528,6 +626,78 @@ export default function ZoningPage() {
               )}
             </Card>
           )}
+<<<<<<< HEAD
+=======
+
+          {tab === 'zoneaisles' && (
+            <Card title="Binding Zone ↔ Aisle/Level (Aisle-Level Zoning)">
+              <div className="mb-3 text-sm text-gray-500">
+                Konfigurasi ini membatasi putaway suatu zone ke aisle tertentu pada rentang level tertentu (mis. RESERVE →
+                semua aisle level B–E; PICK_FAST → level A). Sel kosong = zone dapat memakai aisle mana pun.
+              </div>
+              {zoneAisles.length === 0 ? (
+                <EmptyState message="Belum ada binding zone-aisle — klik New Binding untuk menambah" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[560px]">
+                    <thead>
+                      <tr className="bg-brand-50 text-[11px] uppercase tracking-wider text-brand-700">
+                        <th className="px-3 py-2.5 text-left font-bold">Zone</th>
+                        <th className="px-3 py-2.5 text-left font-bold">Nama</th>
+                        <th className="px-3 py-2.5 text-center font-bold">Aisle</th>
+                        <th className="px-3 py-2.5 text-center font-bold">Level</th>
+                        <th className="px-3 py-2.5 text-center font-bold">Aktif</th>
+                        <th className="px-3 py-2.5 text-center font-bold">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {zoneAisles.map((z) => (
+                        <tr key={z.id} className="hover:bg-brand-50/50">
+                          <td className="px-3 py-2.5">
+                            <span
+                              className="inline-flex px-2 py-0.5 rounded-md text-white text-[11px] font-bold"
+                              style={{ backgroundColor: ZONE_COLORS[z.zone_code.toUpperCase()] || '#94a3b8' }}
+                            >
+                              {z.zone_code}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-gray-600 text-xs">{z.zone_name}</td>
+                          <td className="px-3 py-2.5 text-center font-mono font-semibold text-brand-700">{z.aisle}</td>
+                          <td className="px-3 py-2.5 text-center text-gray-600">{z.min_level} – {z.max_level}</td>
+                          <td className="px-3 py-2.5 text-center">
+                            <Badge ok={Number(z.is_active) === 1}>{Number(z.is_active) === 1 ? 'Aktif' : 'Nonaktif'}</Badge>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {canWrite && (
+                                <button
+                                  onClick={() => openZaEdit(z)}
+                                  title="Edit"
+                                  className="p-1.5 rounded-lg bg-brand-50 text-brand-600 hover:bg-brand-100 border border-brand-100"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {canWrite && (
+                                <button
+                                  onClick={() => deleteZa(z)}
+                                  title="Hapus"
+                                  className="p-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-100"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          )}
+>>>>>>> 3493489 ( KOV better inbound)
         </>
       )}
 
@@ -699,6 +869,62 @@ export default function ZoningPage() {
           </div>
         </form>
       </Modal>
+<<<<<<< HEAD
+=======
+
+      {/* Zone-aisle modal */}
+      <Modal open={zaModal} onClose={() => setZaModal(false)} title={editingZa ? 'Edit Binding Zone-Aisle' : 'New Binding Zone-Aisle'} size="md">
+        <form onSubmit={saveZa} className="space-y-4">
+          <Grid cols={2}>
+            <Field label="Zone" required>
+              <Select value={zaForm.zone_code} onChange={(e) => setZaForm((f) => ({ ...f, zone_code: e.target.value }))}>
+                <option value="">— pilih zone —</option>
+                {zones.map((z) => (
+                  <option key={z.id} value={z.zone_code}>{z.zone_code} — {z.zone_name}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Aisle" required>
+              <Select value={zaForm.aisle} onChange={(e) => setZaForm((f) => ({ ...f, aisle: e.target.value }))}>
+                {AISLES.map((a) => (
+                  <option key={a} value={a}>{a}</option>
+                ))}
+              </Select>
+            </Field>
+          </Grid>
+          <Grid cols={2}>
+            <Field label="Min Level">
+              <Select value={zaForm.min_level} onChange={(e) => setZaForm((f) => ({ ...f, min_level: e.target.value }))}>
+                {LEVELS.map((l) => (
+                  <option key={l} value={l}>{l}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Max Level">
+              <Select value={zaForm.max_level} onChange={(e) => setZaForm((f) => ({ ...f, max_level: e.target.value }))}>
+                {LEVELS.map((l) => (
+                  <option key={l} value={l}>{l}</option>
+                ))}
+              </Select>
+            </Field>
+          </Grid>
+          <Field label="Aktif">
+            <Select value={zaForm.is_active} onChange={(e) => setZaForm((f) => ({ ...f, is_active: Number(e.target.value) }))}>
+              <option value={1}>Aktif</option>
+              <option value={0}>Nonaktif</option>
+            </Select>
+          </Field>
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button type="button" onClick={() => setZaModal(false)} className="px-4 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm font-semibold hover:bg-gray-200">
+              Batal
+            </button>
+            <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold disabled:opacity-60">
+              {saving ? 'Menyimpan…' : 'Simpan'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+>>>>>>> 3493489 ( KOV better inbound)
     </div>
   );
 }

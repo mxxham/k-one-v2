@@ -126,7 +126,8 @@ export class OutboundService {
               COUNT(DISTINCT oi.id)::int as total_items,
               SUM(oi.actual_qty) as total_qty,
               SUM(oi.pallet) as total_pallet,
-              STRING_AGG(DISTINCT oi.od_number, ', ' ORDER BY oi.od_number) as od_numbers
+              STRING_AGG(DISTINCT oi.od_number, ', ' ORDER BY oi.od_number) as od_numbers,
+              (SELECT COUNT(*)::int FROM inbound_items cdi WHERE cdi.cross_dock_outbound_order_id = o.id) as cross_dock_count
        FROM outbound_orders o
        LEFT JOIN customers c ON o.customer_id = c.id
        LEFT JOIN users u ON o.created_by = u.id

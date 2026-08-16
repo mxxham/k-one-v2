@@ -1,6 +1,7 @@
 /**
  * Port of api/handlers/import_helpers.php — pure Excel/CSV import helpers.
  */
+import { deriveUppFromPackSize } from '../common/pallet';
 
 export function importParseDate(val: any): string | null {
   if (val === null || val === undefined) return null;
@@ -68,7 +69,9 @@ export function importNormalizeUom(raw: any, fallback = 'Drum'): string {
   return UOM_MAP[k] ?? (k ? k.charAt(0).toUpperCase() + k.slice(1) : fallback);
 }
 
-export function importUomPerPallet(uom: string, productUpp = 4): number {
+export function importUomPerPallet(uom: string, productUpp = 4, name?: string | null): number {
+  const fromPack = name ? deriveUppFromPackSize(name) : null;
+  if (fromPack) return fromPack;
   switch (String(uom).trim().toLowerCase()) {
     case 'drum': return 4;
     case 'carton': return Math.max(1, productUpp || 44);

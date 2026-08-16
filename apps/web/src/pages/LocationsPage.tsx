@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { Plus, RefreshCw, Pencil, MapPin, Search } from 'lucide-react';
+import { Plus, RefreshCw, Pencil, MapPin, Search, Map, Boxes, List } from 'lucide-react';
 import { api } from '@/lib/api';
 import { fmtNum } from '@/lib/format';
 import { useToast } from '@/components/Toast';
@@ -10,6 +10,7 @@ import Spinner from '@/components/Spinner';
 import Modal from '@/components/Modal';
 import ConfirmButton from '@/components/ConfirmButton';
 import { Field, TextInput, Select, Grid } from '@/components/Field';
+import RackViews from '@/components/RackViews';
 
 interface LocationRow {
   id: number;
@@ -57,6 +58,14 @@ export default function LocationsPage() {
   const [editing, setEditing] = useState<LocationRow | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  const [tab, setTab] = useState<'list' | 'rackmap' | 'rack3d'>('list');
+
+  const TABS = [
+    { key: 'list' as const, label: 'Locations List', icon: List },
+    { key: 'rackmap' as const, label: 'Rack Map (2D)', icon: Map },
+    { key: 'rack3d' as const, label: 'Rack View (3D)', icon: Boxes },
+  ];
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -174,7 +183,7 @@ export default function LocationsPage() {
         subtitle="Master data lokasi penyimpanan"
         actions={
           <>
-            {canWrite && (
+            {canWrite && tab === 'list' && (
               <button
                 onClick={openCreate}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-white text-sm font-semibold border border-white/20"
@@ -192,6 +201,27 @@ export default function LocationsPage() {
         }
       />
 
+      <div className="flex gap-2 mb-5 flex-wrap">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border transition ${
+              tab === t.key
+                ? 'bg-brand-600 text-white border-brand-600 shadow-sm'
+                : 'bg-white text-gray-600 border-gray-200 hover:bg-brand-50'
+            }`}
+          >
+            <t.icon className="w-4 h-4" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab !== 'list' && <RackViews tab={tab} />}
+
+      {tab === 'list' && (
+      <>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
         {zoneStats.map((z) => (
           <div key={z.label} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
@@ -318,6 +348,8 @@ export default function LocationsPage() {
           </div>
         )}
       </Card>
+      </>
+      )}
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit Location' : 'New Location'} size="md">
         <form onSubmit={handleSave} className="space-y-4">
