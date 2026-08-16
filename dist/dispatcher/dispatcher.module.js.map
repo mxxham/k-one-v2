@@ -1,1 +1,0 @@
-{"version":3,"file":"dispatcher.module.js","sourceRoot":"","sources":["../../src/dispatcher/dispatcher.module.ts"],"names":[],"mappings":";;;;;;;;;AAAA,2CAAwC;AACxC,6DAAyD;AAMlD,IAAM,gBAAgB,GAAtB,MAAM,gBAAgB;CAAG,CAAA;AAAnB,4CAAgB;2BAAhB,gBAAgB;IAJ5B,IAAA,eAAM,EAAC;QACN,SAAS,EAAE,EAAE;QACb,WAAW,EAAE,CAAC,sCAAiB,CAAC;KACjC,CAAC;GACW,gBAAgB,CAAG"}
