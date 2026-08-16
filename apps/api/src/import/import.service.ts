@@ -9,6 +9,7 @@ import {
 } from './import.helpers';
 import { readSheetBuffer, readWorkbookSheets } from './sheet.reader';
 import { todayStr, todayCompact, nowCompactTime, addYears } from '../common/date-util';
+import { palletFunctionFor, isFullPallet } from '../common/pallet';
 
 type Q = Record<string, any>;
 type Rows = any[][];
@@ -206,8 +207,8 @@ export class ImportService {
     const syncLocations = async (stockId: number, loc: string, qty: number, row: Q): Promise<void> => {
       const l = loc.trim().toUpperCase();
       if (l === '') return;
-      const isPickFace = l.length > 4 && l[4].toUpperCase() === 'A';
-      const isFull = Number(qty) >= Number(row.uom_per_pallet ?? 4) ? 1 : 0;
+      const palletFunction = palletFunctionFor(l);
+      const isFull = isFullPallet(qty, row.uom_per_pallet);
       const status = row.stock_status === 'Reserved' ? 'Reserved' : 'Available';
       const existingRows = await q(
         `SELECT id, quantity FROM stock_locations WHERE stock_id=$1 ORDER BY pallet_seq, id`,
@@ -233,7 +234,7 @@ export class ImportService {
           `INSERT INTO stock_locations (stock_id, location_code, pallet_seq, quantity, original_quantity, uom,
              is_full_pallet, batch_number, status, pallet_function)
            VALUES ($1,$2,1,$3,$3,$4,$5,$6,$7,$8)`,
-          [stockId, l, qty, row.uom, isFull, row.batch_number || null, status, isPickFace ? 'PICK_FACE' : 'RESERVE'],
+          [stockId, l, qty, row.uom, isFull, row.batch_number || null, status, palletFunction],
         );
       }
     };

@@ -38,7 +38,7 @@ export class OutboundActions {
     setPermission('outbound', 'delete', 'write');
     setPermission('outbound', 'pick_items', 'write');
     setPermission('outbound', 'ship', 'write');
-    setModuleDepartments('outbound', ['outbound']);
+    setModuleDepartments('outbound', ['outbound', 'ops']);
   }
 
   private actCtx(ctx: RequestContext) {

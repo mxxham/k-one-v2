@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 import { ApiException } from '../common/api-exception';
-import { deriveUppFromPackSize } from '../common/pallet';
+import { deriveUppFromPackSize, palletFunctionFor, isFullPallet } from '../common/pallet';
+import { insertStockLocation } from '../common/stock-locations';
+import { generateNumber, DbLike } from '../common/number-gen';
+import { todayCompact } from '../common/date-util';
+import { LpnLabelData } from './label-printer.service';
 
 const SPECIAL_LOCS = ['QUA_SHELL', 'STAGING', 'UNALLOCATED'];
 const LEVEL_HEIGHT: Record<string, number> = { A: 1, B: 2, C: 3, D: 4, E: 5 };
@@ -50,6 +54,14 @@ interface PutawayRule {
   consolidate: number;
 }
 
+interface BlockRow {
+  id: number;
+  scope_type: 'aisle' | 'location';
+  aisle_prefix: string | null;
+  location_code: string | null;
+  reason: string;
+}
+
 @Injectable()
 export class PutawayService {
   constructor(private readonly db: DbService) {}
@@ -85,6 +97,7 @@ export class PutawayService {
   }> {
     const product = await this.getProduct(req.product_id);
     if (!product) throw ApiException.notFound('Produk tidak ditemukan.');
+    const blocks = await this.activeBlocks();
     const uom = (req.uom ?? product.uom_type ?? 'Drum').toUpperCase();
     const derivedUpp = deriveUppFromPackSize(product.product_name);
     const storedUpp = Math.max(1, Number(product.uom_per_pallet ?? 4) || 4);
@@ -138,7 +151,7 @@ export class PutawayService {
     if (pickAllowed && (req.prefer_pick || rule?.full_pallet_to_pick === 1) && fullPallets > 0) {
       const pickQty = await this.currentPickQty(req.product_id);
       if (pickQty < Number(rule?.min_pick_face_qty ?? 0)) {
-        const slots = await this.findAvailable({ levels: [PICK_LEVEL], limit: 1, existingRacks, zones: pickZones, heavyOnly: limits.requires_equipment === 1 });
+        const slots = await this.findAvailable({ levels: [PICK_LEVEL], limit: 1, existingRacks, zones: pickZones, heavyOnly: limits.requires_equipment === 1, blocks });
         const slot = slots[0];
         if (slot) {
           placements.push({ pallet_seq: seq++, quantity: upp, is_full: true, location_code: slot.location_code, zone_code: slot.zone_code, level: PICK_LEVEL, reason: 'PICK_FACE_FULL' });
@@ -148,7 +161,7 @@ export class PutawayService {
     }
 
     if (fullToReserve > 0) {
-      const slots = await this.findAvailable({ levels: reserveLevels, limit: fullToReserve, existingRacks, zones: reserveZones });
+      const slots = await this.findAvailable({ levels: reserveLevels, limit: fullToReserve, existingRacks, zones: reserveZones, blocks });
       for (let i = 0; i < fullToReserve; i++) {
         const s = slots[i];
         if (!s) break;
@@ -162,7 +175,7 @@ export class PutawayService {
     if (remainder > 0) {
       const targetLevel = req.force_level?.toUpperCase() ?? PICK_LEVEL;
       const targetZones = targetLevel === PICK_LEVEL ? pickZones : reserveZones;
-      const slots = await this.findAvailable({ levels: [targetLevel], limit: 1, existingRacks, zones: targetZones, heavyOnly: limits.requires_equipment === 1 });
+      const slots = await this.findAvailable({ levels: [targetLevel], limit: 1, existingRacks, zones: targetZones, heavyOnly: limits.requires_equipment === 1, blocks });
       const slot = slots[0];
       if (slot) {
         placements.push({ pallet_seq: seq++, quantity: remainder, is_full: false, location_code: slot.location_code, zone_code: slot.zone_code, level: slot.level, reason: 'PICK_FACE_REMAINDER' });
@@ -196,6 +209,15 @@ export class PutawayService {
     const code = String(locationCode ?? '').trim().toUpperCase();
     if (SPECIAL_LOCS.includes(code)) {
       return { valid: true, reasons: ['Virtual location — rule checks skipped.'] };
+    }
+
+    // Manual-save safety net: reject saves into an active putaway block, same
+    // as the recommend engine excludes those bins. Keeps manual saves from
+    // bypassing an aisle/bin that an admin explicitly blocked.
+    const blocks = await this.activeBlocks();
+    const hit = this.blockHit(blocks, code);
+    if (hit.blocked) {
+      return { valid: false, reasons: [`Lokasi ${code} diblokir untuk putaway: ${hit.reason ?? ''}`.trim()] };
     }
 
     const loc = await this.getLocation(code);
@@ -318,6 +340,7 @@ export class PutawayService {
   /**
    * Find free (unoccupied) locations on the requested levels.
    * Ordering: zone priority -> existing-SKU rack clustering -> level asc -> position.
+   * Active putaway blocks (aisle prefix / exact bin) are excluded entirely.
    */
   private async findAvailable(opts: {
     levels: string[];
@@ -327,6 +350,8 @@ export class PutawayService {
     zones?: string[];
     /** Only pick locations reachable by heavy equipment (for heavy UOMs). */
     heavyOnly?: boolean;
+    /** Active putaway location blocks — blocked bins are never suggested. */
+    blocks?: BlockRow[];
   }): Promise<Array<{ location_code: string; zone_code: string | null; level: string }>> {
     const levels = opts.levels;
     if (levels.length === 0 || opts.limit <= 0) return [];
@@ -360,6 +385,21 @@ export class PutawayService {
       );
     }
 
+    // Active putaway blocks: exclude bins whose code starts with a blocked
+    // aisle_prefix OR exactly matches a blocked location_code.
+    const blockWheres: string[] = [];
+    if (opts.blocks && opts.blocks.length > 0) {
+      for (const b of opts.blocks) {
+        if (b.scope_type === 'aisle' && b.aisle_prefix) {
+          const ph = next(b.aisle_prefix + '%');
+          blockWheres.push(`lm.location_code NOT LIKE ${ph}`);
+        } else if (b.scope_type === 'location' && b.location_code) {
+          const ph = next(b.location_code);
+          blockWheres.push(`lm.location_code <> ${ph}`);
+        }
+      }
+    }
+
     const sql = `SELECT lm.location_code,
                         COALESCE(lm.zone_code, lm.zone) AS zone_code,
                         lm.row_name AS level
@@ -372,6 +412,7 @@ export class PutawayService {
                    AND lm.location_code NOT IN (
                      SELECT DISTINCT location_code FROM stock_locations WHERE status IN ('Available','Reserved')
                    )
+                   ${blockWheres.length > 0 ? 'AND ' + blockWheres.join(' AND ') : ''}
                  ORDER BY z.priority ASC NULLS LAST, ${orderClauses.join(', ')}
                  LIMIT ${limitPh}`;
 
@@ -579,6 +620,644 @@ export class PutawayService {
   }
 
   // --------------------------------------------------------------------------
+  // Putaway location blocking (blocked aisles/bins — not to be confused with
+  // stock "hold"/quarantine, which is a different concept)
+  // --------------------------------------------------------------------------
+
+  /** All active blocks — used by recommend / validate / rack render. */
+  private async activeBlocks(): Promise<BlockRow[]> {
+    const r = await this.db.query(
+      `SELECT id, scope_type, aisle_prefix, location_code, reason
+         FROM putaway_location_blocks
+        WHERE is_active = TRUE
+        ORDER BY id`,
+    );
+    return r.rows as BlockRow[];
+  }
+
+  /**
+   * True when a location_code is covered by an active block:
+   *  - aisle block: code starts with the aisle_prefix (e.g. 'CF' -> CF*)
+   *  - location block: exact match on location_code
+   */
+  private blockHit(blocks: BlockRow[], code: string | null): { blocked: boolean; reason: string | null } {
+    const c = String(code ?? '').trim().toUpperCase();
+    if (!c) return { blocked: false, reason: null };
+    for (const b of blocks) {
+      if (b.scope_type === 'aisle' && b.aisle_prefix && c.startsWith(b.aisle_prefix)) {
+        return { blocked: true, reason: b.reason };
+      }
+      if (b.scope_type === 'location' && b.location_code && c === b.location_code) {
+        return { blocked: true, reason: b.reason };
+      }
+    }
+    return { blocked: false, reason: null };
+  }
+
+  /** All blocks, most recent first, with the blocking user's name joined. */
+  async listBlocks(): Promise<any[]> {
+    const r = await this.db.query(
+      `SELECT b.*, u.username AS blocked_by_username, u.full_name AS blocked_by_name
+         FROM putaway_location_blocks b
+         LEFT JOIN users u ON u.id = b.blocked_by
+        ORDER BY b.is_active DESC, b.id DESC`,
+    );
+    return r.rows.map((x) => ({
+      ...x,
+      id: Number(x.id),
+      is_active: Boolean(x.is_active),
+      blocked_by: x.blocked_by == null ? null : Number(x.blocked_by),
+    }));
+  }
+
+  /** Create an active block for an aisle (prefix) or an exact bin. */
+  async createBlock(data: Record<string, any>, userId: number): Promise<number> {
+    const scopeType = String(data.scope_type ?? '').trim().toLowerCase();
+    if (scopeType !== 'aisle' && scopeType !== 'location') {
+      throw ApiException.badRequest('scope_type wajib diisi (aisle atau location).');
+    }
+    const reason = String(data.reason ?? '').trim();
+    if (!reason) throw ApiException.badRequest('reason wajib diisi.');
+
+    let aislePrefix: string | null = null;
+    let locationCode: string | null = null;
+    if (scopeType === 'aisle') {
+      aislePrefix = String(data.aisle_prefix ?? '').trim().toUpperCase();
+      if (!aislePrefix) throw ApiException.badRequest('aisle_prefix wajib diisi untuk scope aisle.');
+      if (aislePrefix.length > 10) throw ApiException.badRequest('aisle_prefix terlalu panjang (maks 10 karakter).');
+    } else {
+      locationCode = String(data.location_code ?? '').trim().toUpperCase();
+      if (!locationCode) throw ApiException.badRequest('location_code wajib diisi untuk scope location.');
+      const loc = await this.db.query('SELECT 1 FROM location_master WHERE location_code = $1 AND is_active = 1', [locationCode]);
+      if (loc.rows.length === 0) throw ApiException.badRequest(`Lokasi '${locationCode}' tidak ditemukan di master lokasi.`);
+    }
+
+    // Reject a duplicate ACTIVE block on the same target. (Partial unique
+    // indexes back this up; the query gives a friendlier error message.)
+    const dup = await this.db.query(
+      `SELECT 1 FROM putaway_location_blocks
+        WHERE is_active = TRUE AND scope_type = $1
+          AND (($2::text IS NOT NULL AND aisle_prefix = $2) OR ($3::text IS NOT NULL AND location_code = $3))
+        LIMIT 1`,
+      [scopeType, aislePrefix, locationCode],
+    );
+    if (dup.rows.length > 0) {
+      throw ApiException.conflict(
+        scopeType === 'aisle'
+          ? `Aisle '${aislePrefix}' sudah diblokir untuk putaway.`
+          : `Lokasi '${locationCode}' sudah diblokir untuk putaway.`,
+      );
+    }
+
+    const ins = await this.db.query(
+      `INSERT INTO putaway_location_blocks
+         (scope_type, aisle_prefix, location_code, reason, is_active, blocked_by, blocked_at, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,TRUE,$5,NOW(),NOW(),NOW()) RETURNING id`,
+      [scopeType, aislePrefix, locationCode, reason, userId],
+    );
+    return Number(ins.rows[0].id);
+  }
+
+  /** Soft-delete: is_active=false (history is kept, no hard delete). */
+  async deactivateBlock(id: number): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE putaway_location_blocks SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id`,
+      [id],
+    );
+    if (r.rows.length === 0) throw ApiException.notFound('Blokir lokasi tidak ditemukan.');
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Putaway task queue
+  // --------------------------------------------------------------------------
+
+  /**
+   * Enqueue an item's pallet suggestions into the inbound's putaway task.
+   * Creates the task (Pending) when the inbound has none open yet, then appends
+   * one row per pallet with the engine's suggested bin. Writes nothing to
+   * stock_locations — that happens when the task is completed.
+   */
+  async enqueueForPutaway(params: {
+    itemId: number;
+    inboundOrderId: number;
+    productId: number;
+    userId: number;
+    batch: string | null;
+    uom: string;
+    pallets: Array<{ location_code: string; pallet_seq: number; quantity: number; is_full: boolean; reason?: string | null }>;
+    client?: any;
+  }): Promise<number> {
+    const dbc = params.client ?? this.db;
+    const { inboundOrderId, userId, productId, batch, uom, pallets } = params;
+    if (pallets.length === 0) return 0;
+
+    const open = await dbc.query(
+      `SELECT id FROM putaway_tasks
+        WHERE inbound_order_id = $1 AND status IN ('Pending','In Progress')
+        ORDER BY id DESC LIMIT 1`,
+      [inboundOrderId],
+    );
+    let taskId = open.rows[0] ? Number(open.rows[0].id) : 0;
+
+    if (!taskId) {
+      const taskNumber = await generateNumber(this.db, {
+        table: 'putaway_tasks',
+        column: 'task_number',
+        prefix: `PKA-${todayCompact()}-`,
+        searchPrefix: `PKA-${todayCompact()}-`,
+        pad: 4,
+      });
+      const ins = await dbc.query(
+        `INSERT INTO putaway_tasks (task_number, inbound_order_id, status, created_by, created_at, updated_at)
+         VALUES ($1,$2,'Pending',$3,NOW(),NOW()) RETURNING id`,
+        [taskNumber, inboundOrderId, userId || null],
+      );
+      taskId = Number(ins.rows[0].id);
+    }
+
+    for (const p of pallets) {
+      const loc = String(p.location_code ?? '').trim().toUpperCase();
+      // Unique License Plate Number per pallet, generated at Goods Received so
+      // the label can be printed immediately. Runs on the tx client (dbc) so
+      // the sequence's existence-check sees this transaction's own inserts.
+      const lpn = await generateNumber(dbc as DbLike, {
+        table: 'putaway_task_items',
+        column: 'lpn_code',
+        prefix: `LPN-${todayCompact()}-`,
+        searchPrefix: `LPN-${todayCompact()}-`,
+        pad: 5,
+      });
+      await dbc.query(
+        `INSERT INTO putaway_task_items
+           (task_id, inbound_item_id, product_id, batch_number, uom, pallet_seq, quantity,
+            suggested_location, actual_location, pallet_function, reason, lpn_code, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,$10,$11,'Pending')`,
+        [taskId, params.itemId, productId, batch, uom, p.pallet_seq, Number(p.quantity ?? 0), loc, palletFunctionFor(loc), p.reason ?? null, lpn],
+      );
+    }
+    return taskId;
+  }
+
+  /** Putaway queue: one row per task with pallet counts + assigned/creator. */
+  async listTasks(filter: { status?: string | null; search?: string | null; mine?: number | null } = {}): Promise<any[]> {
+    const params: unknown[] = [];
+    const next = (v: unknown): string => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    const status = String(filter.status ?? '').trim() || null;
+    const search = String(filter.search ?? '').trim() || null;
+    const where: string[] = [];
+    if (status) where.push(`t.status = ${next(status)}`);
+    if (search) where.push(`(t.task_number ILIKE ${next(`%${search}%`)} OR io.order_number ILIKE ${next(`%${search}%`)})`);
+    if (filter.mine) {
+      where.push(`(t.assigned_to = ${next(filter.mine)} OR t.forklift_operator_id = ${next(filter.mine)} OR t.checklist_partner_id = ${next(filter.mine)})`);
+    }
+
+    const r = await this.db.query(
+      `SELECT t.*, io.order_number, io.status AS inbound_status,
+              u.username AS assigned_name, cu.username AS created_by_name,
+              fu.username AS forklift_operator_name, fu.full_name AS forklift_operator_full_name,
+              pu.username AS checklist_partner_name, pu.full_name AS checklist_partner_full_name,
+              (SELECT COUNT(*)::int FROM putaway_task_items ti WHERE ti.task_id = t.id) AS pallet_count,
+              (SELECT COUNT(*)::int FROM putaway_task_items ti WHERE ti.task_id = t.id AND ti.status = 'Done') AS done_count
+         FROM putaway_tasks t
+         LEFT JOIN inbound_orders io ON io.id = t.inbound_order_id
+         LEFT JOIN users u ON u.id = t.assigned_to
+         LEFT JOIN users cu ON cu.id = t.created_by
+         LEFT JOIN users fu ON fu.id = t.forklift_operator_id
+         LEFT JOIN users pu ON pu.id = t.checklist_partner_id
+        ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+        ORDER BY (t.status IN ('Pending','In Progress')) DESC, t.created_at DESC`,
+      params,
+    );
+    return r.rows.map((x) => ({
+      ...x,
+      id: Number(x.id),
+      inbound_order_id: x.inbound_order_id == null ? null : Number(x.inbound_order_id),
+      assigned_to: x.assigned_to == null ? null : Number(x.assigned_to),
+      forklift_operator_id: x.forklift_operator_id == null ? null : Number(x.forklift_operator_id),
+      checklist_partner_id: x.checklist_partner_id == null ? null : Number(x.checklist_partner_id),
+      created_by: x.created_by == null ? null : Number(x.created_by),
+      pallet_count: Number(x.pallet_count ?? 0),
+      done_count: Number(x.done_count ?? 0),
+    }));
+  }
+
+  /** Task header + pallet rows (product info + who completed each pallet). */
+  async taskDetail(taskId: number): Promise<{ task: any; rows: any[] }> {
+    const t = await this.db.query(
+      `SELECT t.*, io.order_number, io.status AS inbound_status,
+              u.username AS assigned_name, cu.username AS created_by_name,
+              fu.username AS forklift_operator_name, fu.full_name AS forklift_operator_full_name,
+              pu.username AS checklist_partner_name, pu.full_name AS checklist_partner_full_name
+         FROM putaway_tasks t
+         LEFT JOIN inbound_orders io ON io.id = t.inbound_order_id
+         LEFT JOIN users u ON u.id = t.assigned_to
+         LEFT JOIN users cu ON cu.id = t.created_by
+         LEFT JOIN users fu ON fu.id = t.forklift_operator_id
+         LEFT JOIN users pu ON pu.id = t.checklist_partner_id
+        WHERE t.id = $1`,
+      [taskId],
+    );
+    const task = t.rows[0];
+    if (!task) throw ApiException.notFound('Putaway task tidak ditemukan.');
+    const r = await this.db.query(
+      `SELECT ti.*, p.product_code, p.product_name, u.username AS completed_by_name
+         FROM putaway_task_items ti
+         LEFT JOIN products p ON p.id = ti.product_id
+         LEFT JOIN users u ON u.id = ti.completed_by
+        WHERE ti.task_id = $1
+        ORDER BY ti.inbound_item_id, ti.pallet_seq`,
+      [taskId],
+    );
+    return {
+      task: {
+        ...task,
+        id: Number(task.id),
+        inbound_order_id: task.inbound_order_id == null ? null : Number(task.inbound_order_id),
+        assigned_to: task.assigned_to == null ? null : Number(task.assigned_to),
+        forklift_operator_id: task.forklift_operator_id == null ? null : Number(task.forklift_operator_id),
+        checklist_partner_id: task.checklist_partner_id == null ? null : Number(task.checklist_partner_id),
+        created_by: task.created_by == null ? null : Number(task.created_by),
+      },
+      rows: r.rows.map((x) => ({
+        ...x,
+        id: Number(x.id),
+        inbound_item_id: x.inbound_item_id == null ? null : Number(x.inbound_item_id),
+        product_id: x.product_id == null ? null : Number(x.product_id),
+        quantity: Number(x.quantity ?? 0),
+        completed_by: x.completed_by == null ? null : Number(x.completed_by),
+      })),
+    };
+  }
+
+  /** Claim a task: assign to an operator and move it to In Progress. */
+  async assignTask(taskId: number, userId: number): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE putaway_tasks
+          SET assigned_to = $2, status = 'In Progress', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+        WHERE id = $1 AND status IN ('Pending','In Progress') RETURNING id`,
+      [taskId, userId],
+    );
+    if (r.rows.length === 0) throw ApiException.conflict('Task tidak dapat diambil (sudah selesai/dibatalkan).');
+    return true;
+  }
+
+  /** Change a pallet row's actual bin, re-validating against putaway rules. */
+  async updateTaskPallet(rowId: number, location: string): Promise<boolean> {
+    const loc = String(location ?? '').trim().toUpperCase();
+    if (!loc) throw ApiException.badRequest('location wajib diisi.');
+    const row = await this.db.query(
+      `SELECT ti.*, t.id AS task_id, t.status AS task_status
+         FROM putaway_task_items ti JOIN putaway_tasks t ON t.id = ti.task_id
+        WHERE ti.id = $1`,
+      [rowId],
+    );
+    const r = row.rows[0];
+    if (!r) throw ApiException.notFound('Pallet task tidak ditemukan.');
+    if (r.task_status === 'Completed' || r.task_status === 'Cancelled') {
+      throw ApiException.conflict('Task sudah selesai/dibatalkan — pallet tidak dapat diubah.');
+    }
+
+    if (!SPECIAL_LOCS.includes(loc)) {
+      const val = await this.validatePlacement(
+        Number(r.product_id),
+        loc,
+        Number(r.quantity),
+        String(r.uom || 'Drum'),
+      );
+      if (!val.valid) throw ApiException.badRequest(val.reasons.join(' | '));
+    }
+    await this.db.query(
+      `UPDATE putaway_task_items SET actual_location = $2, updated_at = NOW() WHERE id = $1`,
+      [rowId, loc],
+    );
+    return true;
+  }
+
+  /** Mark one pallet row Done (operator physically put it away). */
+  async completeTaskPallet(rowId: number, userId: number): Promise<boolean> {
+    // Confirming without overriding the bin = put it in the suggested location.
+    const r = await this.db.query(
+      `UPDATE putaway_task_items ti
+          SET status = 'Done', actual_location = COALESCE(ti.actual_location, ti.suggested_location),
+              completed_by = $2, completed_at = NOW(), updated_at = NOW()
+         FROM putaway_tasks t
+        WHERE ti.id = $1 AND t.id = ti.task_id AND t.status IN ('Pending','In Progress')
+          AND ti.status = 'Pending'
+        RETURNING ti.id, ti.task_id`,
+      [rowId, userId],
+    );
+    if (r.rows.length === 0) throw ApiException.conflict('Pallet tidak dapat ditandai (sudah selesai atau task tidak aktif).');
+    await this.db.query(
+      `UPDATE putaway_tasks SET status = 'In Progress', started_at = COALESCE(started_at, NOW()), updated_at = NOW() WHERE id = $1`,
+      [Number(r.rows[0].task_id)],
+    );
+    return true;
+  }
+
+  /**
+   * Finish the task: write every Done pallet into stock_locations (shared
+   * insertStockLocation — same pallet_function derivation as everywhere else),
+   * then mark the task Completed with labour fields. All rows must be Done.
+   */
+  async completeTask(taskId: number, userId: number): Promise<{ task_number: string; pallets: number; quantity: number }> {
+    const t = await this.db.query(`SELECT * FROM putaway_tasks WHERE id = $1`, [taskId]);
+    const task = t.rows[0];
+    if (!task) throw ApiException.notFound('Putaway task tidak ditemukan.');
+    if (task.status === 'Completed') return { task_number: task.task_number, pallets: 0, quantity: 0 };
+    if (task.status === 'Cancelled') throw ApiException.conflict('Task sudah dibatalkan.');
+
+    const pending = await this.db.query(
+      `SELECT COUNT(*)::int AS c FROM putaway_task_items WHERE task_id = $1 AND status = 'Pending'`,
+      [taskId],
+    );
+    if (Number(pending.rows[0].c ?? 0) > 0) {
+      throw ApiException.conflict(
+        `Task ${task.task_number} masih memiliki ${pending.rows[0].c} pallet Pending. Tandai semua pallet selesai terlebih dahulu.`,
+      );
+    }
+
+    const done = await this.db.query(
+      `SELECT ti.inbound_item_id, ti.product_id, ti.batch_number, ti.uom, ti.pallet_seq,
+              ti.quantity, ti.actual_location, p.uom_per_pallet
+         FROM putaway_task_items ti
+         LEFT JOIN products p ON p.id = ti.product_id
+        WHERE ti.task_id = $1 AND ti.status = 'Done' AND ti.actual_location IS NOT NULL`,
+      [taskId],
+    );
+
+    await this.db.transaction(async (client) => {
+      let quantity = 0;
+      for (const row of done.rows) {
+        const qty = Number(row.quantity ?? 0);
+        const upp = Number(row.uom_per_pallet ?? 4);
+        await insertStockLocation(client, {
+          stock_id: null,
+          location_code: row.actual_location,
+          pallet_seq: Number(row.pallet_seq ?? 1),
+          quantity: qty,
+          original_quantity: qty,
+          uom: row.uom ?? 'Drum',
+          is_full_pallet: isFullPallet(qty, upp),
+          batch_number: row.batch_number ?? null,
+          inbound_item_id: row.inbound_item_id == null ? null : Number(row.inbound_item_id),
+        });
+        quantity += qty;
+      }
+      await client.query(
+        `UPDATE putaway_tasks SET status='Completed', completed_at=NOW(), updated_at=NOW() WHERE id=$1`,
+        [taskId],
+      );
+    });
+
+    return { task_number: task.task_number, pallets: done.rows.length, quantity: done.rows.reduce((a: number, r: any) => a + Number(r.quantity ?? 0), 0) };
+  }
+
+  /** Cancel a Pending/In Progress task (marks its open rows Cancelled). */
+  async cancelTask(taskId: number, userId: number): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE putaway_tasks SET status='Cancelled', cancelled_at=NOW(), cancelled_by=$2, updated_at=NOW()
+        WHERE id=$1 AND status IN ('Pending','In Progress') RETURNING id`,
+      [taskId, userId],
+    );
+    if (r.rows.length === 0) throw ApiException.conflict('Task tidak dapat dibatalkan.');
+    await this.db.query(
+      `UPDATE putaway_task_items SET status='Cancelled', updated_at=NOW() WHERE task_id=$1 AND status='Pending'`,
+      [taskId],
+    );
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Two-person team assignment + LPN labels + mobile task view
+  // --------------------------------------------------------------------------
+
+  /** Active users for the forklift-operator / checklist-partner pickers. */
+  async listAssignableUsers(): Promise<Array<{ id: number; username: string; full_name: string; department: string; role: string }>> {
+    const r = await this.db.query(
+      `SELECT id, username, full_name, department, role FROM users WHERE is_active = 1 ORDER BY full_name`,
+    );
+    return r.rows.map((u) => ({ ...u, id: Number(u.id) }));
+  }
+
+  /**
+   * Assign the 2-person putaway team (forklift operator + checklist partner).
+   * Also moves a Pending task to In Progress + stamps started_at (mirrors the
+   * S42 claim behaviour). Both users must exist AND be active.
+   */
+  async assignTeam(taskId: number, forkliftOperatorId: number, checklistPartnerId: number): Promise<boolean> {
+    if (!forkliftOperatorId || !checklistPartnerId) {
+      throw ApiException.badRequest('forklift_operator_id dan checklist_partner_id wajib diisi.');
+    }
+    if (forkliftOperatorId === checklistPartnerId) {
+      throw ApiException.badRequest('Forklift operator dan checklist partner tidak boleh orang yang sama.');
+    }
+    const r = await this.db.query(
+      `SELECT id, is_active FROM users WHERE id = ANY ($1::bigint[])`,
+      [[forkliftOperatorId, checklistPartnerId]],
+    );
+    const active = new Set<number>(r.rows.filter((u) => Number(u.is_active) === 1).map((u) => Number(u.id)));
+    const missing = [forkliftOperatorId, checklistPartnerId].filter((id) => !active.has(id));
+    if (missing.length > 0) {
+      throw ApiException.badRequest('User yang dipilih tidak ditemukan / tidak aktif.');
+    }
+    const upd = await this.db.query(
+      `UPDATE putaway_tasks
+          SET forklift_operator_id = $2, checklist_partner_id = $3,
+              status = CASE WHEN status = 'Pending' THEN 'In Progress' ELSE status END,
+              started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+        WHERE id = $1 AND status IN ('Pending','In Progress') RETURNING id`,
+      [taskId, forkliftOperatorId, checklistPartnerId],
+    );
+    if (upd.rows.length === 0) throw ApiException.conflict('Task tidak dapat ditugaskan (sudah selesai/dibatalkan).');
+    return true;
+  }
+
+  /** Clear the team off an open task (both team columns back to NULL). */
+  async unassignTeam(taskId: number): Promise<boolean> {
+    const upd = await this.db.query(
+      `UPDATE putaway_tasks SET forklift_operator_id = NULL, checklist_partner_id = NULL, updated_at = NOW()
+        WHERE id = $1 AND status IN ('Pending','In Progress') RETURNING id`,
+      [taskId],
+    );
+    if (upd.rows.length === 0) throw ApiException.conflict('Task tidak dapat di-unassign (sudah selesai/dibatalkan).');
+    return true;
+  }
+
+  /**
+   * The inbound detail screen's view of the open putaway task for an inbound
+   * order (Pending / In Progress — per-inbound granularity so there is one).
+   * Returns the task header (team + counts) and its pallet rows (LPN, product,
+   * suggested bin, status) so receiving staff can print labels and assign the
+   * forklift operator / checklist partner right from the inbound screen.
+   */
+  async getInboundOpenTask(
+    inboundOrderId: number,
+  ): Promise<{ task: Record<string, any>; rows: Array<Record<string, any>> } | null> {
+    const t = await this.db.query(
+      `SELECT t.id, t.task_number, t.status, t.priority, t.assigned_to, a.full_name AS assigned_name,
+              t.forklift_operator_id, fo.full_name AS forklift_operator_name,
+              t.checklist_partner_id, cp.full_name AS checklist_partner_name,
+              COUNT(ti.id)::int AS pallet_count,
+              COUNT(*) FILTER (WHERE ti.status = 'Done')::int AS done_count
+         FROM putaway_tasks t
+         LEFT JOIN users a ON a.id = t.assigned_to
+         LEFT JOIN users fo ON fo.id = t.forklift_operator_id
+         LEFT JOIN users cp ON cp.id = t.checklist_partner_id
+         LEFT JOIN putaway_task_items ti ON ti.task_id = t.id
+        WHERE t.inbound_order_id = $1 AND t.status IN ('Pending','In Progress')
+        GROUP BY t.id, a.full_name, fo.full_name, cp.full_name
+        ORDER BY t.id DESC
+        LIMIT 1`,
+      [inboundOrderId],
+    );
+    if (t.rows.length === 0) return null;
+    const task = t.rows[0];
+    const r = await this.db.query(
+      `SELECT ti.id, ti.inbound_item_id, ti.product_id, p.product_code, p.product_name,
+              ti.batch_number, ti.uom, ti.pallet_seq, ti.quantity, ti.suggested_location,
+              ti.actual_location, ti.status, ti.lpn_code
+         FROM putaway_task_items ti
+         LEFT JOIN products p ON p.id = ti.product_id
+        WHERE ti.task_id = $1
+        ORDER BY ti.pallet_seq`,
+      [Number(task.id)],
+    );
+    return {
+      task: {
+        ...task,
+        id: Number(task.id),
+        assigned_to: task.assigned_to != null ? Number(task.assigned_to) : null,
+        forklift_operator_id: task.forklift_operator_id != null ? Number(task.forklift_operator_id) : null,
+        checklist_partner_id: task.checklist_partner_id != null ? Number(task.checklist_partner_id) : null,
+      },
+      rows: r.rows.map((x) => ({
+        ...x,
+        id: Number(x.id),
+        inbound_item_id: x.inbound_item_id != null ? Number(x.inbound_item_id) : null,
+        product_id: x.product_id != null ? Number(x.product_id) : null,
+      })),
+    };
+  }
+
+  /** Everything the browser needs to render an LPN label for one pallet row. */
+  async getLpnLabelData(rowId: number): Promise<LpnLabelData> {
+    const r = await this.db.query(
+      `SELECT ti.lpn_code, ti.product_id, ti.batch_number, ti.uom, ti.pallet_seq, ti.quantity,
+              ti.suggested_location, t.task_number, io.order_number,
+              p.product_code, p.product_name, to_char(ii.exp_date, 'YYYY-MM-DD') AS exp_date
+         FROM putaway_task_items ti
+         JOIN putaway_tasks t ON t.id = ti.task_id
+         LEFT JOIN inbound_orders io ON io.id = t.inbound_order_id
+         LEFT JOIN products p ON p.id = ti.product_id
+         LEFT JOIN inbound_items ii ON ii.id = ti.inbound_item_id
+        WHERE ti.id = $1`,
+      [rowId],
+    );
+    const row = r.rows[0];
+    if (!row) throw ApiException.notFound('Pallet task tidak ditemukan.');
+    if (!row.lpn_code) throw ApiException.conflict('Pallet ini belum memiliki LPN.');
+    return {
+      lpn_code: row.lpn_code,
+      product_code: row.product_code ?? null,
+      product_name: row.product_name ?? null,
+      batch_number: row.batch_number ?? null,
+      uom: row.uom ?? null,
+      quantity: Number(row.quantity ?? 0),
+      pallet_seq: Number(row.pallet_seq ?? 1),
+      suggested_location: row.suggested_location ?? null,
+      expiry_date: row.exp_date ? String(row.exp_date).slice(0, 10) : null,
+      task_number: row.task_number ?? null,
+      order_number: row.order_number ?? null,
+    };
+  }
+
+  /**
+   * The checklist partner's own open tasks (Pending/In Progress) with their
+   * pallet rows — LPN, target bin, product info — so the mobile dual-scan
+   * screen needs a single action call. Open to any authenticated user (the
+   * gateway lifts the module department restriction for this action).
+   */
+  async myTasks(userId: number): Promise<any[]> {
+    const r = await this.db.query(
+      `SELECT t.id AS task_id, t.task_number, t.inbound_order_id, t.status, t.priority, t.created_at,
+              io.order_number, fu.username AS forklift_operator_name,
+              ti.id AS row_id, ti.lpn_code, ti.product_id, ti.batch_number, ti.uom, ti.pallet_seq,
+              ti.quantity, ti.suggested_location, ti.actual_location, ti.status AS row_status,
+              p.product_code, p.product_name
+         FROM putaway_tasks t
+         JOIN inbound_orders io ON io.id = t.inbound_order_id
+         LEFT JOIN users fu ON fu.id = t.forklift_operator_id
+         LEFT JOIN putaway_task_items ti ON ti.task_id = t.id
+         LEFT JOIN products p ON p.id = ti.product_id
+        WHERE t.checklist_partner_id = $1 AND t.status IN ('Pending','In Progress')
+        ORDER BY (t.status = 'In Progress') DESC, t.created_at DESC, ti.pallet_seq`,
+      [userId],
+    );
+    const map = new Map<number, any>();
+    for (const row of r.rows) {
+      const taskId = Number(row.task_id);
+      let task = map.get(taskId);
+      if (!task) {
+        task = {
+          id: taskId,
+          task_number: row.task_number,
+          inbound_order_id: row.inbound_order_id == null ? null : Number(row.inbound_order_id),
+          order_number: row.order_number,
+          status: row.status,
+          forklift_operator_name: row.forklift_operator_name ?? null,
+          rows: [],
+        };
+        map.set(taskId, task);
+      }
+      if (row.row_id != null) {
+        task.rows.push({
+          id: Number(row.row_id),
+          lpn_code: row.lpn_code ?? null,
+          product_id: row.product_id == null ? null : Number(row.product_id),
+          product_code: row.product_code ?? null,
+          product_name: row.product_name ?? null,
+          batch_number: row.batch_number ?? null,
+          uom: row.uom ?? null,
+          pallet_seq: Number(row.pallet_seq ?? 1),
+          quantity: Number(row.quantity ?? 0),
+          suggested_location: row.suggested_location ?? null,
+          actual_location: row.actual_location ?? null,
+          status: row.row_status,
+        });
+      }
+    }
+    return [...map.values()];
+  }
+
+  /** Open tasks (Pending/In Progress with Pending pallets) for an inbound — gates completion. */
+  async openTaskNumbers(inboundOrderId: number): Promise<string[]> {
+    const r = await this.db.query(
+      `SELECT t.task_number
+         FROM putaway_tasks t JOIN putaway_task_items ti ON ti.task_id = t.id
+        WHERE t.inbound_order_id = $1 AND t.status IN ('Pending','In Progress') AND ti.status = 'Pending'
+        GROUP BY t.task_number`,
+      [inboundOrderId],
+    );
+    return r.rows.map((x) => x.task_number);
+  }
+
+  /** Mark an item's open task rows Done (manual Manage Pallet Locations path). */
+  async reconcileItemRows(itemId: number, userId: number): Promise<void> {
+    await this.db.query(
+      `UPDATE putaway_task_items ti
+          SET status='Done', completed_by=$2, completed_at=NOW(), updated_at=NOW()
+         FROM putaway_tasks t
+        WHERE ti.inbound_item_id = $1 AND ti.status = 'Pending'
+          AND t.id = ti.task_id AND t.status IN ('Pending','In Progress')`,
+      [itemId, userId],
+    );
+  }
+
+  // --------------------------------------------------------------------------
   // Rack map (2D summary) + full bin list (for the 3D render)
   // --------------------------------------------------------------------------
 
@@ -601,7 +1280,13 @@ export class PutawayService {
               COUNT(CASE WHEN sl.id IS NULL THEN 1 END)::int AS free,
               COALESCE(lm.zone_code, lm.zone) AS zone_code,
               MAX(CASE WHEN lm.is_pick_face = 1 THEN 1 ELSE 0 END)::int AS is_pick_face,
-              SUM(CASE WHEN lm.equipment_accessible = 1 THEN 1 ELSE 0 END)::int AS equip_accessible
+              SUM(CASE WHEN lm.equipment_accessible = 1 THEN 1 ELSE 0 END)::int AS equip_accessible,
+              MAX(CASE WHEN EXISTS (
+                SELECT 1 FROM putaway_location_blocks b
+                WHERE b.is_active = TRUE
+                  AND ((b.scope_type = 'aisle' AND lm.location_code LIKE b.aisle_prefix || '%')
+                    OR (b.scope_type = 'location' AND lm.location_code = b.location_code))
+              ) THEN 1 ELSE 0 END)::int AS blocked
        FROM location_master lm
        LEFT JOIN stock_locations sl ON sl.location_code = lm.location_code AND sl.status IN ('Available','Reserved')
        WHERE ${where.join(' AND ')}
@@ -616,6 +1301,7 @@ export class PutawayService {
       free: Number(x.free),
       is_pick_face: Number(x.is_pick_face),
       equip_accessible: Number(x.equip_accessible),
+      blocked: Number(x.blocked),
     }));
 
     let locations: any[] | null = null;
@@ -624,7 +1310,18 @@ export class PutawayService {
         `SELECT lm.location_code, lm.aisle, lm.rack, lm.row_name AS level, lm.position,
                 COALESCE(lm.zone_code, lm.zone) AS zone_code, lm.is_pick_face, lm.equipment_accessible,
                 sl.quantity, sl.batch_number, sl.pallet_function,
-                st.expiry_date, p.product_code, p.product_name
+                st.expiry_date, p.product_code, p.product_name,
+                CASE WHEN EXISTS (
+                  SELECT 1 FROM putaway_location_blocks b
+                  WHERE b.is_active = TRUE
+                    AND ((b.scope_type = 'aisle' AND lm.location_code LIKE b.aisle_prefix || '%')
+                      OR (b.scope_type = 'location' AND lm.location_code = b.location_code))
+                ) THEN 1 ELSE 0 END AS blocked,
+                (SELECT b.reason FROM putaway_location_blocks b
+                  WHERE b.is_active = TRUE
+                    AND ((b.scope_type = 'aisle' AND lm.location_code LIKE b.aisle_prefix || '%')
+                      OR (b.scope_type = 'location' AND lm.location_code = b.location_code))
+                  ORDER BY b.id LIMIT 1) AS block_reason
          FROM location_master lm
          LEFT JOIN stock_locations sl ON sl.location_code = lm.location_code AND sl.status IN ('Available','Reserved')
          LEFT JOIN stock st ON st.id = sl.stock_id
@@ -633,7 +1330,7 @@ export class PutawayService {
          ORDER BY lm.rack, lm.position`,
         [aisle, level],
       );
-      locations = loc.rows.map((x) => ({ ...x, is_pick_face: Number(x.is_pick_face), equipment_accessible: Number(x.equipment_accessible) }));
+      locations = loc.rows.map((x) => ({ ...x, is_pick_face: Number(x.is_pick_face), equipment_accessible: Number(x.equipment_accessible), blocked: Number(x.blocked) }));
     }
 
     return { rows, locations };
@@ -641,6 +1338,7 @@ export class PutawayService {
 
   /** Full per-bin list (occupancy + product) — feeds the 3D rack render. */
   async listAllBins(): Promise<any[]> {
+    const blocks = await this.activeBlocks();
     const r = await this.db.query(
       `SELECT lm.location_code, lm.aisle, lm.rack, lm.row_name AS level, lm.position,
               COALESCE(lm.zone_code, lm.zone) AS zone_code, lm.is_pick_face, lm.equipment_accessible,
@@ -660,12 +1358,17 @@ export class PutawayService {
                 COALESCE(lm.zone_code, lm.zone), lm.is_pick_face, lm.equipment_accessible
        ORDER BY lm.aisle, lm.rack, lm.row_name, lm.position`,
     );
-    return r.rows.map((x) => ({
-      ...x,
-      occupied: x.quantity != null && Number(x.quantity) > 0 ? 1 : 0,
-      quantity: x.quantity != null ? Number(x.quantity) : 0,
-      is_pick_face: Number(x.is_pick_face),
-      equipment_accessible: Number(x.equipment_accessible),
-    }));
+    return r.rows.map((x) => {
+      const hit = this.blockHit(blocks, x.location_code);
+      return {
+        ...x,
+        occupied: x.quantity != null && Number(x.quantity) > 0 ? 1 : 0,
+        quantity: x.quantity != null ? Number(x.quantity) : 0,
+        is_pick_face: Number(x.is_pick_face),
+        equipment_accessible: Number(x.equipment_accessible),
+        blocked: hit.blocked ? 1 : 0,
+        block_reason: hit.reason,
+      };
+    });
   }
 }

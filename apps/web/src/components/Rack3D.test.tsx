@@ -17,6 +17,8 @@ function bin(partial: Partial<Bin3D>): Bin3D {
     product_code: null,
     product_name: null,
     batch_number: null,
+    blocked: 0,
+    block_reason: null,
     ...partial,
   };
 }

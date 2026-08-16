@@ -1,5 +1,14 @@
-import { DbService } from '../database/db.service';
+import { QueryResult, QueryResultRow } from 'pg';
 import { todayCompact, nowCompactTime } from './date-util';
+
+/**
+ * Minimal query surface shared by DbService (the pool) and PoolClient (an
+ * open transaction). Lets generateNumber run inside a transaction so the
+ * sequence's existence-check + insert see the same uncommitted state.
+ */
+export interface DbLike {
+  query<T extends QueryResultRow = any>(text: string, params?: unknown[]): Promise<QueryResult<T>>;
+}
 
 export interface NumberSpec {
   table: string;
@@ -18,7 +27,7 @@ export interface NumberSpec {
  *  existence check, then fallback prefix+His+rand(10,99).
  */
 export async function generateNumber(
-  db: DbService,
+  db: DbLike,
   spec: NumberSpec,
 ): Promise<string> {
   const { table, column, searchPrefix, prefix, pad = 4 } = spec;

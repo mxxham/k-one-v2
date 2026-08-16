@@ -5,6 +5,7 @@ import { ActivityLogger } from '../common/activity-logger';
 import { registerActions, RequestContext, setPermission, setModuleDepartments, setActionDepartments } from '../dispatcher/registry';
 import { ApiException } from '../common/api-exception';
 import { MasterDataService } from '../master/master-data.service';
+import { PutawayService } from '../putaway/putaway.service';
 
 type Q = Record<string, any>;
 
@@ -15,6 +16,7 @@ export class InboundActions {
     private readonly inbound: InboundService,
     private readonly activity: ActivityLogger,
     private readonly master: MasterDataService,
+    private readonly putaway: PutawayService,
   ) {
     registerActions('inbound', {
       list: (c) => this.list(c),
@@ -90,6 +92,7 @@ export class InboundActions {
       users: await this.master.activeUsers(),
       products: await this.master.productOptions(),
       cross_dock_orders: crossDockOrders.rows,
+      putaway_task: await this.putaway.getInboundOpenTask(id),
     };
   }
 
@@ -240,7 +243,7 @@ export class InboundActions {
     const inboundId = Number.parseInt(data.inbound_id ?? '0', 10) || 0;
     const pallets = data.pallet_locations ?? [];
     if (!itemId || !Array.isArray(pallets)) throw ApiException.badRequest('Data tidak valid.');
-    await this.inbound.savePalletLocations(itemId, pallets);
+    await this.inbound.savePalletLocations(itemId, pallets, ctx.user.id);
     await this.activity.log(
       'SAVE_PALLET_LOCATIONS', 'inbound', 'Inbound', inboundId, null,
       'Simpan ' + pallets.length + ' pallet location untuk item ID ' + itemId, null, null, this.actCtx(ctx),

@@ -28,7 +28,7 @@ export class PicklistActions {
     setPermission('picklist', 'complete', 'write');
     setPermission('picklist', 'delete', 'write');
     setPermission('picklist', 'update_item', 'write');
-    setModuleDepartments('picklist', ['outbound']);
+    setModuleDepartments('picklist', ['outbound', 'ops']);
   }
 
   private actCtx(ctx: RequestContext) {

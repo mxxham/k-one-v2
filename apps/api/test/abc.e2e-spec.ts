@@ -119,7 +119,13 @@ describe('ABC Analysis / Velocity-Based Ranking', () => {
     await addOut(p, '2026-08-10', 100);
     await api('abc', 'recompute', adminToken, {}, { date_from: '2026-08-01', date_to: '2026-08-31' });
 
-    const prod = await api('products', 'list', adminToken, {}, { page: 1, per_page: 500 });
+    // resetDb never clears products (master data), so they accumulate across
+    // runs — page by search rather than by id to stay robust at any volume.
+    const [{ product_code: code }] = await q<{ product_code: string }>(
+      'SELECT product_code FROM products WHERE id = $1',
+      [p],
+    );
+    const prod = await api('products', 'list', adminToken, {}, { page: 1, per_page: 100, search: code });
     const found = prod.body.rows.find((r: any) => Number(r.id) === p);
     expect(found.velocity_class).toBe('A');
 

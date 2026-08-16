@@ -28,6 +28,8 @@ import {
   X,
   Eye,
   Ruler,
+  ListChecks,
+  Smartphone,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { roleLabel } from '@/lib/format';
@@ -55,11 +57,11 @@ const NAV: NavSection[] = [
   {
     section: 'Main',
     items: [
-      { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+      { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, depts: ['inbound', 'outbound', 'inventory', 'all'] },
       { to: '/inbound', label: 'Inbound', icon: Truck, depts: ['inbound', 'all'] },
       { to: '/asn', label: 'ASN', icon: CalendarClock, depts: ['inbound', 'all'] },
-      { to: '/outbound', label: 'Outbound', icon: PackageOpen, depts: ['outbound', 'all'] },
-      { to: '/picklist', label: 'Picklist', icon: ClipboardCheck, depts: ['outbound', 'all'] },
+      { to: '/outbound', label: 'Outbound', icon: PackageOpen, depts: ['outbound', 'ops', 'all'] },
+      { to: '/picklist', label: 'Picklist', icon: ClipboardCheck, depts: ['outbound', 'ops', 'all'] },
       { to: '/waves', label: 'Wave Planning', icon: Layers, depts: ['outbound', 'all'] },
       { to: '/stock', label: 'Stock', icon: Boxes, depts: ['inventory', 'all'] },
       { to: '/ledger', label: 'Stock Ledger', icon: BookOpen, depts: ['inventory', 'all'] },
@@ -67,6 +69,8 @@ const NAV: NavSection[] = [
       { to: '/cycle-count', label: 'Cycle Count', icon: CalendarCheck2, depts: ['inventory', 'all'] },
       { to: '/bin-transfer', label: 'Bin Transfer', icon: ArrowLeftRight, depts: ['inventory', 'all'] },
       { to: '/replenishment', label: 'Replenishment', icon: PackageSearch, depts: ['inventory', 'all'] },
+      { to: '/putaway-tasks', label: 'Putaway Tasks', icon: ListChecks, depts: ['inbound', 'inventory', 'ops', 'all'] },
+      { to: '/putaway-scan', label: 'Putaway Saya', icon: Smartphone, depts: ['inbound', 'outbound', 'inventory', 'ops', 'all'] },
     ],
   },
   {
@@ -126,6 +130,7 @@ export default function Layout() {
       'cycle-count': 'Cycle Count',
       'bin-transfer': 'Bin Transfer',
       replenishment: 'Replenishment',
+      'putaway-scan': 'Putaway Saya',
       products: 'Products',
       customers: 'Customers',
       locations: 'Locations',

@@ -74,6 +74,6 @@ export default async function globalSetup(): Promise<void> {
   await test.query(bins.join('\n'));
   console.log(`[test] seeded ${bins.length} rack bins`);
 
-  await test.query(`TRUNCATE stock, stock_locations, stock_ledger, inbound_orders, inbound_items, outbound_orders, outbound_items, outbound_item_locations, picklists, picklist_items, bin_transfers, stock_take, stock_take_items RESTART IDENTITY CASCADE`);
+  await test.query(`TRUNCATE stock, stock_locations, stock_ledger, inbound_orders, inbound_items, outbound_orders, outbound_items, outbound_item_locations, picklists, picklist_items, bin_transfers, stock_take, stock_take_items, putaway_tasks, putaway_task_items RESTART IDENTITY CASCADE`);
   await test.end();
 }

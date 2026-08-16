@@ -21,6 +21,8 @@ import StockTakeList from '@/pages/StockTakeList';
 import StockTakeDetail from '@/pages/StockTakeDetail';
 import CycleCountPage from '@/pages/CycleCountPage';
 import BinTransferPage from '@/pages/BinTransferPage';
+import PutawayTasksPage from '@/pages/PutawayTasksPage';
+import PutawayScanPage from '@/pages/PutawayScanPage';
 import ReplenishmentPage from '@/pages/ReplenishmentPage';
 import WavesPage from '@/pages/WavesPage';
 import AsnList from '@/pages/AsnList';
@@ -91,6 +93,8 @@ export default function App() {
                 <Route path="/cycle-count" element={<CycleCountPage />} />
                 <Route path="/bin-transfer" element={<BinTransferPage />} />
                 <Route path="/replenishment" element={<ReplenishmentPage />} />
+                <Route path="/putaway-tasks" element={<PutawayTasksPage />} />
+                <Route path="/putaway-scan" element={<PutawayScanPage />} />
                 <Route path="/reports" element={<ReportsPage />} />
                 <Route element={<RequireWrite />}>
                   <Route path="/import" element={<ImportPage />} />

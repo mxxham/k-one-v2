@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { Plus, RefreshCw, Pencil, Layers, FlaskConical, Box, Trash2, Route, AlertTriangle } from 'lucide-react';
+import { Plus, RefreshCw, Pencil, Layers, FlaskConical, Box, Trash2, Route, AlertTriangle, Ban } from 'lucide-react';
 import { api } from '@/lib/api';
-import { fmtNum } from '@/lib/format';
+import { fmtNum, fmtDateTime } from '@/lib/format';
 import { useToast } from '@/components/Toast';
 import { useAuth } from '@/context/AuthContext';
 import { PageHeader } from '@/components/PageHeader';
@@ -70,6 +70,19 @@ interface ZoneAisleRow {
   is_active: number;
 }
 
+interface BlockRow {
+  id: number;
+  scope_type: 'aisle' | 'location';
+  aisle_prefix: string | null;
+  location_code: string | null;
+  reason: string;
+  is_active: boolean;
+  blocked_by: number | null;
+  blocked_by_username: string | null;
+  blocked_by_name: string | null;
+  blocked_at: string | null;
+}
+
 const emptyUom = { uom_type: 'Drum', min_level: 'A', max_level: 'E', allow_pick_face: 1, max_weight_kg: '', max_height_cm: '', requires_equipment: 0 };
 const emptyZone = { zone_code: '', zone_name: '', zone_type: 'RESERVE', priority: 10, is_active: 1 };
 const emptyZoneAisle = { zone_code: '', aisle: 'CA', min_level: 'A', max_level: 'E', is_active: 1 };
@@ -86,9 +99,9 @@ const emptyRule = {
 
 export default function ZoningPage() {
   const toast = useToast();
-  const { canWrite } = useAuth();
+  const { canWrite, canAdmin } = useAuth();
 
-  const [tab, setTab] = useState<'uom' | 'product' | 'zone' | 'zoneaisles'>('uom');
+  const [tab, setTab] = useState<'uom' | 'product' | 'zone' | 'zoneaisles' | 'blocks'>('uom');
 
   const [uomLimits, setUomLimits] = useState<UomLimitRow[]>([]);
   const [productRules, setProductRules] = useState<ProductRuleRow[]>([]);
@@ -111,6 +124,13 @@ export default function ZoningPage() {
   const [zaModal, setZaModal] = useState(false);
   const [zaForm, setZaForm] = useState(emptyZoneAisle);
   const [editingZa, setEditingZa] = useState<ZoneAisleRow | null>(null);
+
+  const [blockRows, setBlockRows] = useState<BlockRow[]>([]);
+  const [blockLoading, setBlockLoading] = useState(false);
+  const [locOptions, setLocOptions] = useState<{ id: number; code: string }[]>([]);
+  const [aisleForm, setAisleForm] = useState({ aisle_prefix: '', reason: '' });
+  const [locForm, setLocForm] = useState({ location_code: '', reason: '' });
+  const [blockSaving, setBlockSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -148,6 +168,102 @@ export default function ZoningPage() {
   useEffect(() => {
     if (tab === 'zoneaisles') loadZoneAisles();
   }, [tab, loadZoneAisles]);
+
+  const loadBlocks = useCallback(async () => {
+    setBlockLoading(true);
+    try {
+      const res = await api('putaway', 'list_blocks');
+      setBlockRows((res.rows || []) as BlockRow[]);
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal memuat blokir lokasi');
+    } finally {
+      setBlockLoading(false);
+    }
+  }, [toast]);
+
+  const loadLocationOptions = useCallback(async () => {
+    try {
+      const res = await api('locations', 'all');
+      const rows = (res.rows || []) as any[];
+      setLocOptions(
+        rows
+          .filter((l) => l && (l.location_code || l.code))
+          .map((l) => ({ id: Number(l.id), code: String(l.location_code || l.code) })),
+      );
+    } catch {
+      setLocOptions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'blocks') {
+      loadBlocks();
+      loadLocationOptions();
+    }
+  }, [tab, loadBlocks, loadLocationOptions]);
+
+  const saveAisleBlock = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!aisleForm.aisle_prefix.trim()) {
+      toast('error', 'Aisle wajib diisi');
+      return;
+    }
+    if (!aisleForm.reason.trim()) {
+      toast('error', 'Alasan wajib diisi');
+      return;
+    }
+    setBlockSaving(true);
+    try {
+      await api('putaway', 'create_block', {
+        method: 'POST',
+        body: { scope_type: 'aisle', aisle_prefix: aisleForm.aisle_prefix, reason: aisleForm.reason },
+      });
+      toast('success', 'Aisle diblokir untuk putaway');
+      setAisleForm({ aisle_prefix: '', reason: '' });
+      loadBlocks();
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal memblokir aisle');
+    } finally {
+      setBlockSaving(false);
+    }
+  };
+
+  const saveLocBlock = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!locForm.location_code.trim()) {
+      toast('error', 'Lokasi wajib diisi');
+      return;
+    }
+    if (!locForm.reason.trim()) {
+      toast('error', 'Alasan wajib diisi');
+      return;
+    }
+    setBlockSaving(true);
+    try {
+      await api('putaway', 'create_block', {
+        method: 'POST',
+        body: { scope_type: 'location', location_code: locForm.location_code, reason: locForm.reason },
+      });
+      toast('success', 'Lokasi diblokir untuk putaway');
+      setLocForm({ location_code: '', reason: '' });
+      loadBlocks();
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal memblokir lokasi');
+    } finally {
+      setBlockSaving(false);
+    }
+  };
+
+  const deactivateBlock = async (b: BlockRow) => {
+    if (!window.confirm(`Nonaktifkan blokir ${b.scope_type === 'aisle' ? `aisle ${b.aisle_prefix}` : `lokasi ${b.location_code}`}?`)) return;
+    try {
+      await api('putaway', 'deactivate_block', { method: 'POST', body: { id: b.id } });
+      toast('success', 'Blokir dinonaktifkan');
+      loadBlocks();
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal menonaktifkan blokir');
+    }
+  };
 
   const openZaEdit = (z?: ZoneAisleRow) => {
     setEditingZa(z || null);
@@ -355,7 +471,11 @@ export default function ZoningPage() {
     { key: 'product' as const, label: 'Produk & Putaway Rules', icon: Box },
     { key: 'zone' as const, label: 'Zones', icon: Layers },
     { key: 'zoneaisles' as const, label: 'Zone Aisles', icon: Route },
+    { key: 'blocks' as const, label: 'Blocked Locations', icon: Ban },
   ];
+
+  const activeBlocks = blockRows.filter((b) => b.is_active);
+  const inactiveBlocks = blockRows.filter((b) => !b.is_active);
 
   return (
     <div>
@@ -700,6 +820,172 @@ export default function ZoningPage() {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </Card>
+          )}
+
+          {tab === 'blocks' && (
+            <Card title="Blokir Lokasi Putaway (Blocked Locations)">
+              <div className="mb-4 text-sm text-gray-500">
+                Lokasi / aisle yang diblokir tidak akan{' '}
+                <span className="font-bold">disarankan</span> oleh engine putaway (full pallet maupun
+                sisa ke pick-face), dan juga <span className="font-bold">ditolak</span> saat lokasi
+                disimpan manual (Manage Pallet Locations). Blokir berbeda dari "hold" stok (karantina).
+              </div>
+
+              {canAdmin && (
+                <div className="grid gap-4 lg:grid-cols-2 mb-5">
+                  <div className="rounded-xl border border-gray-200 p-4">
+                    <div className="text-sm font-bold text-gray-700 mb-2">Block Aisle</div>
+                    <form onSubmit={saveAisleBlock} className="space-y-3">
+                      <Field label="Aisle Prefix" required hint="cth: CF — semua lokasi berawalan CF diblokir">
+                        <TextInput
+                          value={aisleForm.aisle_prefix}
+                          onChange={(e) => setAisleForm((f) => ({ ...f, aisle_prefix: e.target.value.toUpperCase() }))}
+                          placeholder="cth: CF"
+                        />
+                      </Field>
+                      <Field label="Alasan" required>
+                        <TextInput
+                          value={aisleForm.reason}
+                          onChange={(e) => setAisleForm((f) => ({ ...f, reason: e.target.value }))}
+                          placeholder="cth: Renovasi aisle"
+                        />
+                      </Field>
+                      <button
+                        type="submit"
+                        disabled={blockSaving}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-60"
+                      >
+                        <Ban className="w-4 h-4" /> {blockSaving ? 'Menyimpan…' : 'Blokir Aisle'}
+                      </button>
+                    </form>
+                  </div>
+                  <div className="rounded-xl border border-gray-200 p-4">
+                    <div className="text-sm font-bold text-gray-700 mb-2">Block Specific Location</div>
+                    <form onSubmit={saveLocBlock} className="space-y-3">
+                      <Field label="Kode Lokasi" required hint="Autocomplete dari daftar lokasi">
+                        <TextInput
+                          list="blocked-loc-options"
+                          value={locForm.location_code}
+                          onChange={(e) => setLocForm((f) => ({ ...f, location_code: e.target.value.toUpperCase() }))}
+                          placeholder="cth: CF05B01"
+                        />
+                        <datalist id="blocked-loc-options">
+                          {locOptions.map((l) => (
+                            <option key={l.id} value={l.code} />
+                          ))}
+                        </datalist>
+                      </Field>
+                      <Field label="Alasan" required>
+                        <TextInput
+                          value={locForm.reason}
+                          onChange={(e) => setLocForm((f) => ({ ...f, reason: e.target.value }))}
+                          placeholder="cth: Bin rusak / ditutup"
+                        />
+                      </Field>
+                      <button
+                        type="submit"
+                        disabled={blockSaving}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-60"
+                      >
+                        <Ban className="w-4 h-4" /> {blockSaving ? 'Menyimpan…' : 'Blokir Lokasi'}
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {blockLoading ? (
+                <Spinner label="Memuat blokir…" />
+              ) : (
+                <>
+                  <div className="mb-2 text-[11px] uppercase tracking-wider text-gray-400 font-bold">Blokir Aktif</div>
+                  {activeBlocks.length === 0 ? (
+                    <EmptyState message="Belum ada blokir aktif" />
+                  ) : (
+                    <div className="overflow-x-auto mb-6">
+                      <table className="w-full text-sm min-w-[760px]">
+                        <thead>
+                          <tr className="bg-brand-50 text-[11px] uppercase tracking-wider text-brand-700">
+                            <th className="px-3 py-2.5 text-left font-bold">Tipe</th>
+                            <th className="px-3 py-2.5 text-left font-bold">Target</th>
+                            <th className="px-3 py-2.5 text-left font-bold">Alasan</th>
+                            <th className="px-3 py-2.5 text-left font-bold">Diblokir oleh</th>
+                            <th className="px-3 py-2.5 text-center font-bold">Pada</th>
+                            <th className="px-3 py-2.5 text-center font-bold">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {activeBlocks.map((b) => (
+                            <tr key={b.id} className="hover:bg-brand-50/50">
+                              <td className="px-3 py-2.5">
+                                <span className="inline-flex px-2 py-0.5 rounded-md bg-red-50 text-red-700 text-[11px] font-bold border border-red-100">
+                                  {b.scope_type === 'aisle' ? 'AISLE' : 'LOKASI'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5 font-mono font-semibold text-brand-700">
+                                {b.scope_type === 'aisle' ? `${b.aisle_prefix}*` : b.location_code}
+                              </td>
+                              <td className="px-3 py-2.5 text-gray-600">{b.reason}</td>
+                              <td className="px-3 py-2.5 text-gray-600">{b.blocked_by_name || b.blocked_by_username || '—'}</td>
+                              <td className="px-3 py-2.5 text-center text-gray-500">{fmtDateTime(b.blocked_at)}</td>
+                              <td className="px-3 py-2.5 text-center">
+                                {canAdmin && (
+                                  <button
+                                    onClick={() => deactivateBlock(b)}
+                                    title="Nonaktifkan"
+                                    className="p-1.5 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-100"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {inactiveBlocks.length > 0 && (
+                    <details className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                      <summary className="cursor-pointer text-sm font-bold text-gray-600">
+                        Riwayat Blokir Nonaktif ({inactiveBlocks.length})
+                      </summary>
+                      <div className="overflow-x-auto mt-3">
+                        <table className="w-full text-sm min-w-[720px]">
+                          <thead>
+                            <tr className="bg-gray-100 text-[11px] uppercase tracking-wider text-gray-500">
+                              <th className="px-3 py-2.5 text-left font-bold">Tipe</th>
+                              <th className="px-3 py-2.5 text-left font-bold">Target</th>
+                              <th className="px-3 py-2.5 text-left font-bold">Alasan</th>
+                              <th className="px-3 py-2.5 text-left font-bold">Diblokir oleh</th>
+                              <th className="px-3 py-2.5 text-center font-bold">Pada</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {inactiveBlocks.map((b) => (
+                              <tr key={b.id} className="text-gray-400">
+                                <td className="px-3 py-2.5">
+                                  <span className="inline-flex px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 text-[11px] font-bold border border-gray-200">
+                                    {b.scope_type === 'aisle' ? 'AISLE' : 'LOKASI'}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2.5 font-mono font-semibold">
+                                  {b.scope_type === 'aisle' ? `${b.aisle_prefix}*` : b.location_code}
+                                </td>
+                                <td className="px-3 py-2.5">{b.reason}</td>
+                                <td className="px-3 py-2.5">{b.blocked_by_name || b.blocked_by_username || '—'}</td>
+                                <td className="px-3 py-2.5 text-center">{fmtDateTime(b.blocked_at)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
+                </>
               )}
             </Card>
           )}

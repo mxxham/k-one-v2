@@ -49,7 +49,10 @@ export function getPermission(module: string, action: string): 'write' | 'admin'
  * Department requirements per action. A module-level default applies to every
  * action in the module; a per-action override wins. When set, only users whose
  * department is in the list (or department === 'all', which always passes) may
- * run the action. Unset means no department restriction.
+ * run the action. Unset (or an explicit EMPTY override array) means no
+ * department restriction — an empty array lets an action opt out of its
+ * module's default (e.g. putaway::my_tasks is open to any department because
+ * the checklist partner may be from any active department).
  */
 const departmentDefaults = new Map<string, string[]>();
 const departmentOverrides = new Map<string, string[]>();
@@ -63,5 +66,10 @@ export function setActionDepartments(module: string, action: string, departments
 }
 
 export function getDepartments(module: string, action: string): string[] | undefined {
-  return departmentOverrides.get(`${module}::${action}`) ?? departmentDefaults.get(module);
+  const key = `${module}::${action}`;
+  if (departmentOverrides.has(key)) {
+    const o = departmentOverrides.get(key);
+    return o && o.length > 0 ? o : undefined;
+  }
+  return departmentDefaults.get(module);
 }

@@ -7,12 +7,13 @@ export interface User {
   department?: string;
 }
 
-export type Department = 'inbound' | 'outbound' | 'inventory' | 'all';
+export type Department = 'inbound' | 'outbound' | 'inventory' | 'ops' | 'all';
 
 export const DEPARTMENTS: Array<{ key: Department; label: string }> = [
   { key: 'inbound', label: 'Inbound' },
   { key: 'outbound', label: 'Outbound' },
   { key: 'inventory', label: 'Inventory' },
+  { key: 'ops', label: 'Operations' },
   { key: 'all', label: 'Semua Departemen (Supervisor)' },
 ];
 
@@ -25,6 +26,8 @@ export function departmentHome(department?: string): string {
       return '/dashboard/outbound';
     case 'inventory':
       return '/dashboard/inventory';
+    case 'ops':
+      return '/putaway-tasks';
     default:
       return '/dashboard';
   }

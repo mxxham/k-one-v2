@@ -11,7 +11,7 @@ export interface CurrentUser {
   department: string;
 }
 
-export const DEPARTMENTS = ['inbound', 'outbound', 'inventory', 'all'] as const;
+export const DEPARTMENTS = ['inbound', 'outbound', 'inventory', 'ops', 'all'] as const;
 export type Department = (typeof DEPARTMENTS)[number];
 
 export function isDepartment(v: unknown): v is Department {

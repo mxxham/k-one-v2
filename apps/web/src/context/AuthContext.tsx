@@ -43,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthContextValue>(
     () => {
-      const department = (['inbound', 'outbound', 'inventory', 'all'].includes(user?.department ?? '') ? user!.department : 'all') as Department;
+      const department = (['inbound', 'outbound', 'inventory', 'ops', 'all'].includes(user?.department ?? '') ? user!.department : 'all') as Department;
       return {
         user,
         isAuthenticated: !!user,

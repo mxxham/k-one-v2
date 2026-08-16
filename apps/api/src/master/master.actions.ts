@@ -52,12 +52,14 @@ export class MasterActions {
       update: (c) => this.locationUpdate(c),
       delete: (c) => this.locationDelete(c),
       parse_codes: (c) => this.locationParseCodes(c),
+      print_labels: (c) => this.locationPrintLabels(c),
     });
     setPermission('locations', 'create', 'write');
     setPermission('locations', 'update', 'write');
     setPermission('locations', 'delete', 'admin');
     setModuleDepartments('locations', ['all']);
     setActionDepartments('locations', 'all', ['inventory']);
+    setActionDepartments('locations', 'print_labels', ['inventory']);
     registerActions('users', {
       list: (c) => this.userList(c),
       create: (c) => this.userCreate(c),
@@ -635,6 +637,7 @@ export class MasterActions {
         { key: 'inbound', label: 'Inbound' },
         { key: 'outbound', label: 'Outbound' },
         { key: 'inventory', label: 'Inventory' },
+        { key: 'ops', label: 'Operations' },
         { key: 'all', label: 'Semua Departemen (Supervisor)' },
       ],
     };
@@ -782,5 +785,31 @@ export class MasterActions {
         message: `Error parsing locations: ${error.message}`,
       };
     }
+  }
+
+  /**
+   * Rack-walk bin labels (S44): returns the printable rows for a batch of bin
+   * labels — all active locations, optionally narrowed to one zone. Ordered in
+   * rack-walk order (aisle → rack → row → position) so a printed run matches
+   * walking the racks. The frontend draws each barcode client-side (JsBarcode)
+   * and window.print()s the whole grid.
+   */
+  private async locationPrintLabels(ctx: RequestContext): Promise<Q> {
+    const zone = ctx.query.zone ? String(ctx.query.zone) : null;
+    const params: unknown[] = [];
+    let where = 'lm.is_active = 1';
+    if (zone) {
+      params.push(zone);
+      where += ` AND lm.zone = $${params.length}`;
+    }
+    const r = await this.db.query(
+      `SELECT lm.location_code, lm.aisle, lm.rack, lm.row_name, lm.position, lm.zone
+       FROM location_master lm
+       WHERE ${where}
+       ORDER BY lm.aisle NULLS LAST, lm.rack NULLS LAST, lm.row_name NULLS LAST, lm.position NULLS LAST, lm.location_code
+       LIMIT 500`,
+      params,
+    );
+    return { rows: r.rows };
   }
 }

@@ -891,6 +891,16 @@ export class ReportService {
       UPDATE_CYCLECOUNT: 'Edit Jadwal Cycle Count',
       DELETE_CYCLECOUNT: 'Hapus Jadwal Cycle Count',
       RUN_CYCLECOUNT: 'Run Cycle Count',
+      CREATE_PUTAWAY_BLOCK: 'Blokir Lokasi Putaway',
+      DEACTIVATE_PUTAWAY_BLOCK: 'Nonaktifkan Blokir Lokasi Putaway',
+      TASK_ASSIGN: 'Ambil Putaway Task',
+      TASK_UPDATE_PALLET: 'Ubah Lokasi Pallet (Putaway)',
+      TASK_COMPLETE_PALLET: 'Selesai Putaway Pallet',
+      TASK_COMPLETE: 'Selesaikan Putaway Task',
+      TASK_CANCEL: 'Batalkan Putaway Task',
+      TASK_TEAM_ASSIGN: 'Tugaskan Tim Putaway',
+      TASK_TEAM_UNASSIGN: 'Hapus Penugasan Tim Putaway',
+      PRINT_LPN_LABEL: 'Cetak Label LPN',
     };
     if (labels[action]) return labels[action];
     return action

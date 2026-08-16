@@ -110,6 +110,22 @@ export function levelOf(locationCode: string | null | undefined): string {
 }
 
 /**
+ * pallet_function for a location code: PICK_FACE at pick-face level (A),
+ * otherwise RESERVE (bulk / high storage). Mirrors import.service syncLocations
+ * + migration 007 semantics, so every stock_locations write agrees.
+ */
+export function palletFunctionFor(locationCode: string | null | undefined): 'PICK_FACE' | 'RESERVE' {
+  return levelOf(locationCode) === 'A' ? 'PICK_FACE' : 'RESERVE';
+}
+
+/** is_full_pallet flag: 1 when qty reaches the pallet capacity (UPP). */
+export function isFullPallet(qty: number, uomPerPallet: number | null | undefined): number {
+  const upp = Number(uomPerPallet ?? 4);
+  if (!(upp > 0)) return 1;
+  return Number(qty) >= upp - 0.001 ? 1 : 0;
+}
+
+/**
  * calcPalletByLocation: level 'A' -> round(qty/upp,2) fractional,
  * other levels -> (int) ceil.
  */

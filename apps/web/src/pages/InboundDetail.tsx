@@ -1,6 +1,6 @@
 ﻿import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Trash2, Edit3, CalendarDays, Boxes, MapPin, Layers, ChevronRight, Printer, ClipboardList, AlertTriangle, Sparkles } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Edit3, CalendarDays, Boxes, MapPin, Layers, ChevronRight, Printer, ClipboardList, AlertTriangle, Sparkles, UsersRound } from 'lucide-react';
 import { api, apiHref } from '@/lib/api';
 import { WebBtn } from '@/components/WebBtn';
 import { fmtDate, fmtNum, todayISO } from '@/lib/format';
@@ -15,6 +15,7 @@ import { Field, TextInput, Select, Grid } from '@/components/Field';
 import { useToast } from '@/components/Toast';
 import { useAuth } from '@/context/AuthContext';
 import ScanInput from '@/components/ScanInput';
+import LpnLabel, { LpnLabelData } from '@/components/LpnLabel';
 
 const ITEM_STATUSES = ['Dues In', 'Goods Received', 'Unserviceable', 'ATP'];
 const WORKFLOW_STEPS = ['Draft', 'Dues In', 'Receiving', 'Goods Received', 'ATP', 'Completed'];
@@ -96,6 +97,48 @@ interface DetailData {
   users?: DetailUser[];
   products?: any[];
   cross_dock_orders?: any[];
+  putaway_task?: PutawayTaskData | null;
+}
+
+interface PutawayTaskRow {
+  id: number;
+  inbound_item_id: number | null;
+  product_id: number | null;
+  product_code: string | null;
+  product_name: string | null;
+  batch_number: string | null;
+  uom: string | null;
+  pallet_seq: number;
+  quantity: number;
+  suggested_location: string | null;
+  actual_location: string | null;
+  status: string;
+  lpn_code: string | null;
+}
+
+interface PutawayTaskData {
+  task: {
+    id: number;
+    task_number: string;
+    status: string;
+    assigned_to: number | null;
+    assigned_name: string | null;
+    forklift_operator_id: number | null;
+    forklift_operator_name: string | null;
+    checklist_partner_id: number | null;
+    checklist_partner_name: string | null;
+    pallet_count: number;
+    done_count: number;
+  };
+  rows: PutawayTaskRow[];
+}
+
+interface AssignableUser {
+  id: number;
+  username: string;
+  full_name: string;
+  department: string;
+  role: string;
 }
 
 interface SearchProduct {
@@ -270,7 +313,7 @@ export default function InboundDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { canWrite, canAdmin } = useAuth();
+  const { canWrite, canAdmin, user } = useAuth();
 
   const [data, setData] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -322,6 +365,17 @@ export default function InboundDetail() {
   const [addSuggesting, setAddSuggesting] = useState(false);
   const [addSuggestMsg, setAddSuggestMsg] = useState('');
 
+  // Putaway task on the inbound screen (S49): LPN label print + 2-person team
+  // assignment (forklift operator + checklist partner who scans on mobile).
+  const [putawayUsers, setPutawayUsers] = useState<AssignableUser[]>([]);
+  const [teamModal, setTeamModal] = useState(false);
+  const [teamFo, setTeamFo] = useState('');
+  const [teamCp, setTeamCp] = useState('');
+  const [teamBusy, setTeamBusy] = useState(false);
+  const [labelModal, setLabelModal] = useState(false);
+  const [label, setLabel] = useState<LpnLabelData | null>(null);
+  const [labelBusy, setLabelBusy] = useState(false);
+
   const fetchDetail = useCallback(async () => {
     if (!id) return;
     setLoading(true);
@@ -338,6 +392,74 @@ export default function InboundDetail() {
   useEffect(() => {
     fetchDetail();
   }, [fetchDetail]);
+
+  const loadPutawayUsers = useCallback(async () => {
+    try {
+      const res = await api('putaway', 'assignable_users');
+      setPutawayUsers((res.rows || []) as AssignableUser[]);
+    } catch {
+      // pickers are optional — ignore failures
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPutawayUsers();
+  }, [loadPutawayUsers]);
+
+  const openTeamAssign = () => {
+    const pt = data?.putaway_task;
+    if (!pt) return;
+    setTeamFo(pt.task.forklift_operator_id ? String(pt.task.forklift_operator_id) : '');
+    setTeamCp(pt.task.checklist_partner_id ? String(pt.task.checklist_partner_id) : '');
+    setTeamModal(true);
+  };
+
+  const submitTeamAssign = async () => {
+    const pt = data?.putaway_task;
+    if (!pt) return;
+    if (!teamFo || !teamCp) return toast('error', 'Pilih forklift operator dan checklist partner.');
+    try {
+      setTeamBusy(true);
+      await api('putaway', 'assign_task', {
+        body: { id: pt.task.id, forklift_operator_id: Number(teamFo), checklist_partner_id: Number(teamCp) },
+      });
+      toast('success', 'Tim putaway ditugaskan.');
+      setTeamModal(false);
+      await fetchDetail();
+    } catch (e: any) {
+      toast('error', e.message || 'Gagal menugaskan tim');
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+
+  const unassignTeam = async () => {
+    const pt = data?.putaway_task;
+    if (!pt) return;
+    try {
+      setTeamBusy(true);
+      await api('putaway', 'unassign_task', { body: { id: pt.task.id } });
+      toast('success', 'Penugasan tim dihapus.');
+      await fetchDetail();
+    } catch (e: any) {
+      toast('error', e.message || 'Gagal menghapus penugasan tim');
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+
+  const printLpnLabel = async (rowId: number) => {
+    try {
+      setLabelBusy(true);
+      const res = await api('putaway', 'print_lpn_label', { body: { id: rowId } });
+      setLabel(res.label as LpnLabelData);
+      setLabelModal(true);
+    } catch (e: any) {
+      toast('error', e.message || 'Gagal memuat label LPN');
+    } finally {
+      setLabelBusy(false);
+    }
+  };
 
   const runMutation = async (fn: () => Promise<any>, successMsg: string): Promise<boolean> => {
     setBusy(true);
@@ -462,9 +584,10 @@ export default function InboundDetail() {
     );
   };
 
-  // Phase 2 — scanner-first putaway: validates the scanned product matches the
-  // expected item (next in Dues In/Goods Received that still needs putaway).
+  // Phase 2 — scanner-first putaway: a matching scan auto-advances the expected
+  // item (next in Dues In/Goods Received that still needs putaway).
   const putawayTarget = data?.items.find((it) => it.in_process_status === 'Dues In' || it.in_process_status === 'Goods Received') ?? null;
+  const scanNextStatus = putawayTarget?.in_process_status === 'Dues In' ? 'Goods Received' : 'ATP';
 
   const handleScan = async (code: string) => {
     setScanErr(null);
@@ -485,7 +608,35 @@ export default function InboundDetail() {
     const expectedCode = putawayTarget?.product_code || '';
     if (putawayTarget && expectedCode && scannedCode === expectedCode) {
       setScanMatchId(putawayTarget.id);
-      toast('success', `${scannedCode} cocok — ${putawayTarget.product_name || ''}`);
+      const next = putawayTarget.in_process_status === 'Dues In' ? 'Goods Received' : 'ATP';
+
+      let orderStatus = order.status;
+      if (orderStatus === 'Draft') {
+        await api('inbound', 'advance_status', { body: { id: Number(id), status: 'Dues In' } });
+        orderStatus = 'Dues In';
+      }
+      if (orderStatus === 'Dues In' && user?.id) {
+        await api('inbound', 'advance_status', {
+          body: { id: Number(id), status: 'Receiving', received_by_id: user.id, received_date: todayISO() },
+        });
+      }
+
+      await runMutation(
+        () =>
+          api('inbound', 'update_item_status', {
+            body: { item_id: putawayTarget.id, inbound_id: Number(id), status: next },
+          }),
+        `${putawayTarget.product_code || scannedCode} → ${next}`,
+      );
+
+      const fresh: any = await api('inbound', 'detail', { params: { id } });
+      const freshItems: ItemDetail[] = fresh?.items ?? [];
+      const allDone = freshItems.length > 0 && freshItems.every((it) => ['ATP', 'Unserviceable'].includes(it.in_process_status ?? ''));
+      if (allDone) {
+        await api('inbound', 'complete', { body: { id: Number(id) } });
+        await fetchDetail();
+        toast('success', 'Inbound otomatis dikomplit');
+      }
     } else {
       setScanCode(code);
       setScanErr(
@@ -717,9 +868,19 @@ export default function InboundDetail() {
 
   const order = data.order;
   const statusNorm = (s: string) => (s === 'Good Received' ? 'Goods Received' : s);
-  const activeIdx = WORKFLOW_STEPS.indexOf(statusNorm(order.status));
+  const orderIdx = WORKFLOW_STEPS.indexOf(statusNorm(order.status));
+  const wfItems = data.items ?? [];
+  const allDone = wfItems.length > 0 && wfItems.every((it) => ['ATP', 'Unserviceable'].includes(it.in_process_status ?? ''));
+  const anyReceived = wfItems.some((it) => ['Goods Received', 'ATP'].includes(it.in_process_status ?? ''));
+  const itemIdx = allDone ? WORKFLOW_STEPS.indexOf('ATP') : anyReceived ? WORKFLOW_STEPS.indexOf('Goods Received') : -1;
+  const activeIdx = orderIdx >= 0 ? Math.max(orderIdx, itemIdx) : orderIdx;
   const isDone = order.status === 'Completed' || order.status === 'Cancelled';
   const editable = canWrite && !isDone;
+
+  const pt = data.putaway_task ?? null;
+  const ptEditable =
+    canWrite && !isDone && !!pt && (pt.task.status === 'Pending' || pt.task.status === 'In Progress');
+  const hasTeam = !!(pt && (pt.task.forklift_operator_id || pt.task.checklist_partner_id));
 
   const palletCount = (item: ItemDetail) => data.item_pallet_counts?.[String(item.id)] ?? item.pallet ?? 0;
 
@@ -818,7 +979,7 @@ const headerActions = (
               );
             })}
           </div>
-          <StatusBadge status={order.status} />
+          <StatusBadge status={activeIdx >= 0 ? WORKFLOW_STEPS[activeIdx] : order.status} />
         </div>
       </Card>
 
@@ -857,7 +1018,7 @@ const headerActions = (
       >
         {editable && (
           <div className="px-3 pt-3">
-            <ScanInput onScan={handleScan} placeholder={`Scan SKU → validasi putaway${putawayTarget ? ` (${putawayTarget.product_code || ''})` : ''}`} disabled={busy} className="max-w-md" />
+            <ScanInput onScan={handleScan} placeholder={`Scan SKU → ${putawayTarget ? `${putawayTarget.product_code || ''} → ${scanNextStatus}` : 'semua item selesai'}`} disabled={busy} className="max-w-md" />
             {putawayTarget && (
               <div className="text-[11px] text-gray-400 mt-1">
                 Diproses: {putawayTarget.product_code || '—'} · {putawayTarget.product_name || ''} · {putawayTarget.batch_number || '—'}
@@ -1002,6 +1163,142 @@ const headerActions = (
           </div>
         )}
       </Card>
+
+      {data.putaway_task && (
+        <Card
+          title={`Putaway Task — ${data.putaway_task.task.task_number}`}
+          actions={
+            ptEditable ? (
+              <div className="flex items-center gap-2">
+                {hasTeam ? (
+                  <>
+                    <button
+                      onClick={openTeamAssign}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand-600 text-white hover:bg-brand-700"
+                    >
+                      <UsersRound className="w-3.5 h-3.5" /> Ubah Tim
+                    </button>
+                    <ConfirmButton label="Lepas Tim" confirmText="Hapus penugasan tim?" onConfirm={unassignTeam} variant="ghost" />
+                  </>
+                ) : (
+                  <button
+                    onClick={openTeamAssign}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand-600 text-white hover:bg-brand-700"
+                  >
+                    <UsersRound className="w-3.5 h-3.5" /> Tugaskan Tim
+                  </button>
+                )}
+              </div>
+            ) : undefined
+          }
+        >
+          <div className="flex items-center gap-3 flex-wrap mb-3 text-sm">
+            <StatusBadge status={data.putaway_task.task.status} />
+            <span className="text-gray-600">
+              <span className="font-semibold">{data.putaway_task.task.done_count}</span>/
+              {data.putaway_task.task.pallet_count} pallet selesai
+            </span>
+            <span className="text-gray-600">
+              Forklift:{' '}
+              <span className="font-semibold">{data.putaway_task.task.forklift_operator_name || 'Belum ditugaskan'}</span>
+            </span>
+            <span className="text-gray-600">
+              Checklist (scan):{' '}
+              <span className="font-semibold">{data.putaway_task.task.checklist_partner_name || 'Belum ditugaskan'}</span>
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wide text-gray-500">
+                  <th className="px-3 py-2">LPN</th>
+                  <th className="px-3 py-2">Produk</th>
+                  <th className="px-3 py-2">Batch</th>
+                  <th className="px-3 py-2 text-right">Qty</th>
+                  <th className="px-3 py-2">Lokasi Tujuan</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.putaway_task.rows.map((row) => (
+                  <tr key={row.id} className="border-t border-gray-100">
+                    <td className="px-3 py-2 font-mono text-xs font-semibold">{row.lpn_code || '—'}</td>
+                    <td className="px-3 py-2">
+                      <div className="font-semibold">{row.product_code || '—'}</div>
+                      <div className="text-[11px] text-gray-500">{row.product_name || ''}</div>
+                    </td>
+                    <td className="px-3 py-2 text-gray-600">{row.batch_number || '—'}</td>
+                    <td className="px-3 py-2 text-right font-medium">
+                      {fmtNum(row.quantity)} {row.uom || ''}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-gray-700">{row.suggested_location || '—'}</td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={row.status} />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {canWrite && (
+                        <button
+                          onClick={() => printLpnLabel(row.id)}
+                          disabled={labelBusy}
+                          className="p-1.5 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40"
+                          title="Cetak label LPN"
+                        >
+                          <Printer className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      <Modal open={teamModal} onClose={() => setTeamModal(false)} title="Tugaskan Tim Putaway" size="sm">
+        <div className="space-y-4">
+          <Field label="Forklift Operator" required>
+            <Select value={teamFo} onChange={(e) => setTeamFo(e.target.value)}>
+              <option value="">— Pilih operator —</option>
+              {putawayUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name} ({u.username}){u.department !== 'all' ? ` · ${u.department}` : ''}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Checklist Partner (scan)" required>
+            <Select value={teamCp} onChange={(e) => setTeamCp(e.target.value)}>
+              <option value="">— Pilih partner —</option>
+              {putawayUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name} ({u.username}){u.department !== 'all' ? ` · ${u.department}` : ''}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              onClick={() => setTeamModal(false)}
+              className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200"
+            >
+              Batal
+            </button>
+            <button
+              onClick={submitTeamAssign}
+              disabled={teamBusy}
+              className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 disabled:opacity-50"
+            >
+              {teamBusy ? 'Menyimpan…' : 'Tugaskan Tim'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={labelModal} onClose={() => setLabelModal(false)} title="Label LPN" size="sm">
+        {labelBusy ? <Spinner label="Memuat label…" /> : label ? <LpnLabel label={label} /> : null}
+      </Modal>
       <Modal open={advanceOpen} onClose={() => setAdvanceOpen(false)} title="Advance to Receiving" size="sm">
         <div className="space-y-4">
           <Field label="Received By" required>

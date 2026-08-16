@@ -36,7 +36,9 @@ export class ReportActions {
       reset_operational_data: (c) => this.resetOperationalData(c),
     });
     setPermission('system', 'reset_operational_data', 'admin');
-    setModuleDepartments('dashboard', ['all']);
+    // S43: dashboards are for the three functional departments + all (supervisor/
+    // admin). ops operators get a handheld menu set — NO dashboards.
+    setModuleDepartments('dashboard', ['inbound', 'outbound', 'inventory', 'all']);
     setModuleDepartments('report', ['all']);
     setModuleDepartments('activitylog', ['all']);
     setModuleDepartments('system', ['all']);

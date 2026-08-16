@@ -87,6 +87,9 @@ const TRANSACTIONAL_TABLES = [
   'asn',
   'asn_items',
   'cycle_count_schedules',
+  'putaway_location_blocks',
+  'putaway_tasks',
+  'putaway_task_items',
 ];
 
 /** The default test rack map: CA/CB, bays 1-3, levels A-E, 2 pos (60 bins). */

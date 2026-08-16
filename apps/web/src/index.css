@@ -29,3 +29,50 @@ textarea:focus {
 .stat-card:hover {
   transform: translateY(-3px);
 }
+
+/* LPN label printing: window.print() outputs only the .lpn-print-area block. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .lpn-print-area,
+  .lpn-print-area * {
+    visibility: visible;
+  }
+  .lpn-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 320px;
+    border: none !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* Rack-walk bin labels (S44): window.print() outputs the whole .bin-print-area
+   grid — one small label per bin, laid out so a printed run matches walking
+   the racks. */
+@media print {
+  .bin-print-area,
+  .bin-print-area * {
+    visibility: visible;
+  }
+  .bin-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    border: none !important;
+  }
+  .bin-print-area .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  .bin-label {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

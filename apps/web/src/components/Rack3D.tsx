@@ -18,6 +18,8 @@ export interface Bin3D {
   product_code: string | null;
   product_name: string | null;
   batch_number: string | null;
+  blocked: number;
+  block_reason: string | null;
 }
 
 const AISLES = ['CA', 'CB', 'CC', 'CD', 'CE', 'CF', 'CG'];
@@ -83,7 +85,8 @@ interface BinMeshProps {
 
 const BinMesh = memo(function BinMesh({ bin, pos, hovered, selected, onHover, onSelect }: BinMeshProps) {
   const occupied = bin.occupied === 1;
-  const baseColor = zoneColor(bin.zone_code, occupied);
+  const blocked = bin.blocked === 1;
+  const baseColor = blocked ? '#dc2626' : zoneColor(bin.zone_code, occupied);
   return (
     <mesh
       position={pos}
@@ -102,9 +105,9 @@ const BinMesh = memo(function BinMesh({ bin, pos, hovered, selected, onHover, on
         color={baseColor}
         emissive={selected || hovered ? baseColor : '#000000'}
         emissiveIntensity={selected ? 0.55 : hovered ? 0.35 : 0}
-        transparent={!occupied}
-        opacity={occupied ? 1 : 0.12}
-        depthWrite={occupied}
+        transparent={!occupied && !blocked}
+        opacity={occupied || blocked ? 1 : 0.12}
+        depthWrite={occupied || blocked}
         roughness={0.6}
         metalness={0.05}
       />

@@ -18,6 +18,7 @@ interface AisleMapRow {
   zone_code: string | null;
   is_pick_face: number;
   equip_accessible: number;
+  blocked: number;
 }
 
 interface AisleBin {
@@ -33,6 +34,9 @@ interface AisleBin {
   batch_number: string | null;
   product_code: string | null;
   product_name: string | null;
+  pallet_function: string | null;
+  blocked: number;
+  block_reason: string | null;
 }
 
 export default function RackViews({ tab }: { tab: 'rackmap' | 'rack3d' }) {
@@ -112,13 +116,21 @@ export default function RackViews({ tab }: { tab: 'rackmap' | 'rack3d' }) {
                     <th className="px-3 py-2.5 text-center font-bold">Qty</th>
                     <th className="px-3 py-2.5 text-center font-bold">Batch</th>
                     <th className="px-3 py-2.5 text-center font-bold">Produk</th>
+                    <th className="px-3 py-2.5 text-center font-bold">Fungsi</th>
                     <th className="px-3 py-2.5 text-center font-bold">Heavy</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {aisleBins.map((b) => (
                     <tr key={b.location_code} className="hover:bg-brand-50/50">
-                      <td className="px-3 py-2 font-mono text-xs font-semibold text-brand-700">{b.location_code}</td>
+                      <td className="px-3 py-2 font-mono text-xs font-semibold text-brand-700">
+                        {b.location_code}
+                        {Number(b.blocked) === 1 && (
+                          <span className="ml-1.5 inline-flex px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-red-600 text-white" title={b.block_reason || ''}>
+                            DIBLOKIR
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-center text-xs">
                         <span
                           className="inline-flex px-2 py-0.5 rounded-md text-white text-[11px] font-bold"
@@ -135,6 +147,9 @@ export default function RackViews({ tab }: { tab: 'rackmap' | 'rack3d' }) {
                         ) : (
                           <span className="text-gray-400">Kosong</span>
                         )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {b.quantity != null ? <FungsiBadge fn={b.pallet_function} /> : <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-3 py-2 text-center">
                         <Badge ok={Number(b.equipment_accessible) === 1}>{Number(b.equipment_accessible) === 1 ? 'Ya' : 'Tidak'}</Badge>
@@ -180,6 +195,7 @@ export default function RackViews({ tab }: { tab: 'rackmap' | 'rack3d' }) {
                               >
                                 <span>{r.occupied}/{r.total}</span>
                                 {Number(r.equip_accessible) > 0 && <span className="text-[9px] font-semibold opacity-90">⚙ {r.equip_accessible}</span>}
+                                {Number(r.blocked) > 0 && <span className="text-[9px] font-bold opacity-90" title="Ada bin diblokir">⛔</span>}
                               </button>
                             ) : (
                               <span className="text-gray-300">—</span>
@@ -212,6 +228,10 @@ export default function RackViews({ tab }: { tab: 'rackmap' | 'rack3d' }) {
           <span className="inline-flex items-center gap-1">
             <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: '#475569' }} />
             <span className="text-gray-500">Kosong</span>
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: '#dc2626' }} />
+            <span className="text-gray-500">Diblokir</span>
           </span>
         </div>
       }
@@ -246,6 +266,16 @@ export default function RackViews({ tab }: { tab: 'rackmap' | 'rack3d' }) {
                 )}
                 <Row label="Pick Face" value={Number((selectedBin || hoveredBin)!.is_pick_face) === 1 ? 'Ya' : 'Tidak'} />
                 <Row label="Heavy Equip" value={Number((selectedBin || hoveredBin)!.equipment_accessible) === 1 ? 'Ya' : 'Tidak'} />
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {Number((selectedBin || hoveredBin)!.quantity) > 0 && (
+                    <FungsiBadge fn={(selectedBin || hoveredBin)!.pallet_function} />
+                  )}
+                  {Number((selectedBin || hoveredBin)!.blocked) === 1 && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600 text-white text-[11px] font-bold">
+                      ⛔ DIBLOKIR — {(selectedBin || hoveredBin)!.block_reason || 'untuk putaway'}
+                    </span>
+                  )}
+                </div>
               </dl>
             </div>
           )}
@@ -279,4 +309,18 @@ function Badge({ ok, children }: { ok: boolean; children: React.ReactNode }) {
       {children}
     </span>
   );
+}
+
+function FungsiBadge({ fn }: { fn: string | null }) {
+  const v = String(fn ?? '').toUpperCase();
+  if (v === 'PICK_FACE') {
+    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white">PICK FACE</span>;
+  }
+  if (v === 'RESERVE') {
+    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-600 text-white">BULK</span>;
+  }
+  if (v === 'MIXED') {
+    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-600 text-white">MIXED</span>;
+  }
+  return <span className="text-gray-400">—</span>;
 }

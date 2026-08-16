@@ -5,7 +5,8 @@ import { PicklistService } from '../picklist/picklist.service';
 import { generateNumber } from '../common/number-gen';
 import { todayStr, nowDatetime, addYears } from '../common/date-util';
 import { ApiException } from '../common/api-exception';
-import { calculatePalletDistribution as palletDist, calcPalletByLocation } from '../common/pallet';
+import { calculatePalletDistribution as palletDist, calcPalletByLocation, palletFunctionFor } from '../common/pallet';
+import { insertStockLocation } from '../common/stock-locations';
 
 type Client = any;
 
@@ -301,23 +302,6 @@ export class InboundService {
         const dist = palletDist(quantity, uomPerPallet);
         const palletLocs = dist.map((p) => ({ ...p, location_code: item.location }));
         await this.saveItemLocations(itemId, null, palletLocs, batchNumber, uom, dbc);
-      } else {
-        // No bin given -> auto-apply putaway recommendation so the item lands
-        // in bulk (full pallets) / PICK_FAST Level A (remainder) automatically.
-        const rec = await this.putaway.recommendLocations({
-          product_id: item.product_id,
-          quantity,
-          uom,
-        });
-        const suggested = (rec?.pallets ?? []).map((p) => ({
-          location_code: p.location_code,
-          pallet_seq: p.pallet_seq,
-          quantity: p.quantity,
-          is_full: p.is_full !== false,
-        }));
-        if (suggested.length > 0) {
-          await this.saveItemLocations(itemId, null, suggested, batchNumber, uom, dbc);
-        }
       }
     }
     return itemId;
@@ -336,23 +320,17 @@ export class InboundService {
     if (!palletLocs || palletLocs.length === 0) return;
     for (const p of palletLocs) {
       const qty = Number(p.quantity ?? 0);
-      await dbc.query(
-        `INSERT INTO stock_locations
-           (stock_id, location_code, pallet_seq, quantity, original_quantity, uom,
-            is_full_pallet, batch_number, inbound_item_id, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Available')`,
-        [
-          stockId,
-          p.location_code,
-          p.pallet_seq ?? p.pallet_number ?? 1,
-          qty,
-          qty,
-          uom,
-          (p.is_full ?? true) ? 1 : 0,
-          batchNumber,
-          itemId,
-        ],
-      );
+      await insertStockLocation(dbc, {
+        stock_id: stockId,
+        location_code: p.location_code,
+        pallet_seq: p.pallet_seq ?? p.pallet_number ?? 1,
+        quantity: qty,
+        original_quantity: qty,
+        uom,
+        is_full_pallet: (p.is_full ?? true) ? 1 : 0,
+        batch_number: batchNumber,
+        inbound_item_id: itemId,
+      });
     }
   }
 
@@ -621,6 +599,47 @@ export class InboundService {
         await delLedger();
         const cur = await runningBal();
         await insertLedger(`[Inbound] Goods Received | In-Process: Goods Received | ${it.order_number}`, totalQty, it.location ?? null, cur + totalQty);
+
+        const hasLocs = await client.query('SELECT 1 FROM stock_locations WHERE inbound_item_id=$1 LIMIT 1', [itemId]);
+        if (hasLocs.rows.length === 0 && !it.cross_dock_outbound_order_id) {
+          // Putaway task queue: pallet suggestions (fixed bin or engine-driven)
+          // go into the inbound's putaway task — stock_locations rows are only
+          // written when the operator completes the task.
+          let palletLocs: Array<{ location_code: string; pallet_seq: number; quantity: number; is_full: boolean; reason?: string | null }> = [];
+          if (it.location) {
+            palletLocs = palletDist(totalQty, uomPerPlt).map((p) => ({
+              location_code: it.location,
+              pallet_seq: p.pallet_number,
+              quantity: p.quantity,
+              is_full: p.is_full !== false,
+            }));
+          } else {
+            const rec = await this.putaway.recommendLocations({
+              product_id: pid,
+              quantity: totalQty,
+              uom: it.uom,
+            });
+            palletLocs = (rec?.pallets ?? []).map((p) => ({
+              location_code: p.location_code,
+              pallet_seq: p.pallet_seq,
+              quantity: p.quantity,
+              is_full: p.is_full !== false,
+              reason: p.reason ?? null,
+            }));
+          }
+          if (palletLocs.length > 0) {
+            await this.putaway.enqueueForPutaway({
+              itemId,
+              inboundOrderId: Number(it.io_id),
+              productId: pid,
+              userId: createdBy ?? 0,
+              batch,
+              uom: it.uom ?? 'Drum',
+              pallets: palletLocs,
+              client,
+            });
+          }
+        }
       } else if (newProcess === 'Unserviceable') {
         await client.query(
           `DELETE FROM stock s USING stock_locations sl WHERE sl.stock_id = s.id AND sl.inbound_item_id = $1`,
@@ -654,7 +673,7 @@ export class InboundService {
     });
   }
 
-  async savePalletLocations(itemId: number, pallets: any[]): Promise<void> {
+  async savePalletLocations(itemId: number, pallets: any[], userId = 0): Promise<void> {
     const db = this.db;
     const specialLocs = ['QUA_SHELL', 'STAGING'];
     const invalidLocs: string[] = [];
@@ -701,8 +720,8 @@ export class InboundService {
       const pQty = Number(p.quantity ?? 0);
       await db.query(
         `INSERT INTO stock_locations
-           (inbound_item_id, location_code, pallet_seq, quantity, original_quantity, uom, is_full_pallet, batch_number, status)
-         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,'Available')`,
+           (inbound_item_id, location_code, pallet_seq, quantity, original_quantity, uom, is_full_pallet, batch_number, status, pallet_function)
+         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,'Available',$8)`,
         [
           itemId,
           String(p.location_code ?? '').trim().toUpperCase(),
@@ -711,9 +730,13 @@ export class InboundService {
           it.uom ?? 'Drum',
           (p.is_full ? 1 : 0),
           batch,
+          palletFunctionFor(String(p.location_code ?? '').trim().toUpperCase()),
         ],
       );
     }
+    // Manual Manage Pallet Locations path: mark the item's open putaway task
+    // rows Done so an uncompleted task never blocks inbound completion.
+    await this.putaway.reconcileItemRows(itemId, userId);
   }
 
   async saveItemLocation(itemId: number, loc: string): Promise<void> {
@@ -858,6 +881,12 @@ export class InboundService {
   // complete
   // --------------------------------------------------------------------------
   async complete(id: number): Promise<void> {
+    const openTasks = await this.putaway.openTaskNumbers(id);
+    if (openTasks.length > 0) {
+      throw ApiException.conflict(
+        `Selesaikan putaway task terlebih dahulu: ${openTasks.join(', ')} masih memiliki pallet yang belum diputaway.`,
+      );
+    }
     await this.db.transaction(async (client) => {
       const inbound = await this.getById(id);
       const items = await this.getItems(id);

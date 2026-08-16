@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { Plus, RefreshCw, Pencil, MapPin, Search, Map, Boxes, List } from 'lucide-react';
+import { Plus, RefreshCw, Pencil, MapPin, Search, Map, Boxes, List, Printer } from 'lucide-react';
 import { api } from '@/lib/api';
 import { fmtNum } from '@/lib/format';
 import { useToast } from '@/components/Toast';
@@ -11,6 +11,7 @@ import Modal from '@/components/Modal';
 import ConfirmButton from '@/components/ConfirmButton';
 import { Field, TextInput, Select, Grid } from '@/components/Field';
 import RackViews from '@/components/RackViews';
+import LocationLabels, { LocationLabelRow } from '@/components/LocationLabels';
 
 interface LocationRow {
   id: number;
@@ -58,6 +59,10 @@ export default function LocationsPage() {
   const [editing, setEditing] = useState<LocationRow | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  const [labelModalOpen, setLabelModalOpen] = useState(false);
+  const [binLabels, setBinLabels] = useState<LocationLabelRow[]>([]);
+  const [labelsBusy, setLabelsBusy] = useState(false);
 
   const [tab, setTab] = useState<'list' | 'rackmap' | 'rack3d'>('list');
 
@@ -168,6 +173,21 @@ export default function LocationsPage() {
     }
   };
 
+  const printBinLabels = async () => {
+    try {
+      setLabelsBusy(true);
+      const res: any = await api('locations', 'print_labels', {
+        params: { zone: zoneFilter || undefined },
+      });
+      setBinLabels(res.rows ?? []);
+      setLabelModalOpen(true);
+    } catch (err: any) {
+      toast('error', err.message || 'Gagal memuat label lokasi');
+    } finally {
+      setLabelsBusy(false);
+    }
+  };
+
   const set = (k: keyof typeof emptyForm) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const zoneStats = zones.map((z) => ({
@@ -260,6 +280,14 @@ export default function LocationsPage() {
             className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 inline-flex items-center gap-2"
           >
             <Search className="w-4 h-4" /> Terapkan
+          </button>
+          <button
+            onClick={printBinLabels}
+            disabled={labelsBusy}
+            className="px-4 py-2 rounded-lg bg-white text-gray-700 text-sm font-semibold hover:bg-gray-100 border border-gray-300 inline-flex items-center gap-2 disabled:opacity-50"
+            title="Cetak label barcode untuk semua bin pada filter zone saat ini (rack walk)"
+          >
+            <Printer className="w-4 h-4" /> {labelsBusy ? 'Memuat…' : 'Cetak Label Lokasi'}
           </button>
         </div>
 
@@ -396,6 +424,10 @@ export default function LocationsPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={labelModalOpen} onClose={() => setLabelModalOpen(false)} title="Cetak Label Lokasi (rack walk)" size="lg">
+        <LocationLabels labels={binLabels} onClose={() => setLabelModalOpen(false)} />
       </Modal>
     </div>
   );
