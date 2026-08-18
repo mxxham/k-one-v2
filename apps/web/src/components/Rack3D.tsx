@@ -39,6 +39,16 @@ export const ZONE_COLORS: Record<string, string> = {
   UNALLOCATED: '#64748b',
 };
 
+export const FUNCTION_COLORS: Record<string, string> = {
+  PICK_FACE: ZONE_COLORS.PICK_FAST,
+  RESERVE: ZONE_COLORS.BULK,
+  MIXED: '#7c3aed',
+};
+
+export function functionColor(fn?: string | null): string {
+  return FUNCTION_COLORS[String(fn ?? '').toUpperCase()] ?? '';
+}
+
 export function zoneColor(zone?: string | null, occupied = true): string {
   if (!occupied) return '#475569';
   return ZONE_COLORS[String(zone ?? '').toUpperCase()] || '#94a3b8';
@@ -86,7 +96,7 @@ interface BinMeshProps {
 const BinMesh = memo(function BinMesh({ bin, pos, hovered, selected, onHover, onSelect }: BinMeshProps) {
   const occupied = bin.occupied === 1;
   const blocked = bin.blocked === 1;
-  const baseColor = blocked ? '#dc2626' : zoneColor(bin.zone_code, occupied);
+  const baseColor = blocked ? '#dc2626' : (occupied ? functionColor(bin.pallet_function) : '') || zoneColor(bin.zone_code, occupied);
   return (
     <mesh
       position={pos}

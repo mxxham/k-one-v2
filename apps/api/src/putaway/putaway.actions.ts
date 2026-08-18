@@ -311,9 +311,12 @@ export class PutawayActions {
     const id = Number.parseInt(d.id ?? '0', 10) || 0;
     if (!id) throw ApiException.badRequest('id wajib diisi.');
     const r = await this.putaway.completeTask(id, ctx.user.id);
+    let message = `Putaway task ${r.task_number} selesai (${r.pallets} pallet, ${r.quantity} qty)`;
+    if (r.items_advanced > 0) message += `, ${r.items_advanced} item → ATP`;
+    if (r.inbound_completed) message += ', inbound otomatis dikomplit';
     await this.activity.log(
       'TASK_COMPLETE', 'putaway', 'PutawayTask', id, r.task_number,
-      `Putaway task ${r.task_number} selesai (${r.pallets} pallet, ${r.quantity} qty)`,
+      message,
       null, null, this.actCtx(ctx),
     );
     return { ...r, id };

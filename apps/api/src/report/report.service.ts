@@ -945,6 +945,8 @@ export class ReportService {
       'outbound_orders',
       'inbound_items',
       'inbound_orders',
+      'putaway_task_items',
+      'putaway_tasks',
       'stock_locations',
       'stock',
     ];

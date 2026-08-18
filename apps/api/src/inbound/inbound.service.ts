@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 import { PutawayService } from '../putaway/putaway.service';
 import { PicklistService } from '../picklist/picklist.service';
@@ -34,6 +34,7 @@ interface InboundItem {
 export class InboundService {
   constructor(
     private readonly db: DbService,
+    @Inject(forwardRef(() => PutawayService))
     private readonly putaway: PutawayService,
     private readonly picklist: PicklistService,
   ) {}

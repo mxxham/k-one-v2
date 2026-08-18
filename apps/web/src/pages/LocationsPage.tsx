@@ -8,10 +8,13 @@ import { PageHeader } from '@/components/PageHeader';
 import { Card, EmptyState } from '@/components/Card';
 import Spinner from '@/components/Spinner';
 import Modal from '@/components/Modal';
+import Pagination from '@/components/Pagination';
 import ConfirmButton from '@/components/ConfirmButton';
 import { Field, TextInput, Select, Grid } from '@/components/Field';
 import RackViews from '@/components/RackViews';
 import LocationLabels, { LocationLabelRow } from '@/components/LocationLabels';
+
+const PER_PAGE = 25;
 
 interface LocationRow {
   id: number;
@@ -51,6 +54,8 @@ export default function LocationsPage() {
 
   const [rows, setRows] = useState<LocationRow[]>([]);
   const [zones, setZones] = useState<ZoneSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [zoneFilter, setZoneFilter] = useState('');
   const [availableOnly, setAvailableOnly] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -76,16 +81,17 @@ export default function LocationsPage() {
     setLoading(true);
     try {
       const res = await api('locations', 'list', {
-        params: { zone: zoneFilter || undefined, available_only: availableOnly ? '1' : undefined },
+        params: { zone: zoneFilter || undefined, available_only: availableOnly ? '1' : undefined, page, per_page: PER_PAGE },
       });
       setRows(res.rows || []);
       setZones(res.zones || []);
+      setTotal(Number(res.total) || 0);
     } catch (err: any) {
       toast('error', err.message || 'Gagal memuat data lokasi');
     } finally {
       setLoading(false);
     }
-  }, [zoneFilter, availableOnly, toast]);
+  }, [zoneFilter, availableOnly, page, toast]);
 
   useEffect(() => {
     load();
@@ -190,6 +196,8 @@ export default function LocationsPage() {
 
   const set = (k: keyof typeof emptyForm) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
+
   const zoneStats = zones.map((z) => ({
     label: z.zone || '—',
     total: Number(z.total) || 0,
@@ -212,7 +220,7 @@ export default function LocationsPage() {
               </button>
             )}
             <button
-              onClick={() => load()}
+              onClick={() => { setPage(1); load(); }}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-semibold border border-white/20"
             >
               <RefreshCw className="w-4 h-4" /> Refresh
@@ -258,7 +266,7 @@ export default function LocationsPage() {
         <div className="mb-4 flex items-end gap-3 flex-wrap">
           <div className="w-56">
             <Field label="Filter Zone">
-              <Select value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)}>
+              <Select value={zoneFilter} onChange={(e) => { setPage(1); setZoneFilter(e.target.value); }}>
                 <option value="">Semua Zone</option>
                 {ZONE_OPTIONS.map((z) => (
                   <option key={z} value={z}>{z}</option>
@@ -270,13 +278,13 @@ export default function LocationsPage() {
             <input
               type="checkbox"
               checked={availableOnly}
-              onChange={(e) => setAvailableOnly(e.target.checked)}
+              onChange={(e) => { setPage(1); setAvailableOnly(e.target.checked); }}
               className="accent-brand-600"
             />
             <span className="text-sm text-gray-600 font-medium">Hanya lokasi kosong</span>
           </label>
           <button
-            onClick={() => load()}
+            onClick={() => setPage(1)}
             className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 inline-flex items-center gap-2"
           >
             <Search className="w-4 h-4" /> Terapkan
@@ -296,6 +304,7 @@ export default function LocationsPage() {
         ) : rows.length === 0 ? (
           <EmptyState message="Tidak ada data lokasi" />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[880px]">
               <thead>
@@ -374,6 +383,10 @@ export default function LocationsPage() {
               </tbody>
             </table>
           </div>
+          <div className="flex items-center justify-between gap-3 mt-4 border-t border-gray-100 pt-4 flex-wrap">
+            <Pagination page={page} totalPages={totalPages} total={total} onChange={setPage} />
+          </div>
+          </>
         )}
       </Card>
       </>

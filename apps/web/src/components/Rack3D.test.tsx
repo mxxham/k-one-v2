@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bayNumber, computeLayout, zoneColor, type Bin3D } from './Rack3D';
+import { bayNumber, computeLayout, zoneColor, functionColor, type Bin3D } from './Rack3D';
 
 function bin(partial: Partial<Bin3D>): Bin3D {
   return {
@@ -85,5 +85,16 @@ describe('zoneColor', () => {
     expect(zoneColor('BULK')).toBe('#3b82f6');
     expect(zoneColor('UNKNOWN')).toBe('#94a3b8');
     expect(zoneColor(null, false)).toBe('#475569');
+  });
+});
+
+describe('functionColor', () => {
+  it('maps pallet functions to the tag colors shown in the 3D view', () => {
+    expect(functionColor('PICK_FACE')).toBe('#10b981');
+    expect(functionColor('RESERVE')).toBe('#3b82f6');
+    expect(functionColor('MIXED')).toBe('#7c3aed');
+    expect(functionColor('reserve')).toBe('#3b82f6');
+    expect(functionColor(null)).toBe('');
+    expect(functionColor('')).toBe('');
   });
 });

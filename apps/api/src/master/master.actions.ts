@@ -328,40 +328,82 @@ export class MasterActions {
   private async locationList(ctx: RequestContext): Promise<Q> {
     const zone = ctx.query.zone ? String(ctx.query.zone) : null;
     const availableOnly = ctx.query.available_only === '1' || ctx.query.available_only === 'true';
-    const rows = await this.locationGetAll(zone, availableOnly);
+    const perPage = Math.max(1, Number.parseInt(ctx.query.per_page ?? '25', 10) || 25);
+    const page = Math.max(1, Number.parseInt(ctx.query.page ?? '1', 10) || 1);
+    const offset = (page - 1) * perPage;
+    const [rows, total] = await Promise.all([
+      this.locationGetAll(zone, availableOnly, perPage, offset),
+      this.countLocations(zone, availableOnly),
+    ]);
     const zones = await this.locationZoneSummary();
-    return { rows, zones };
+    return { rows, total, page, per_page: perPage, zones };
   }
 
-  private async locationGetAll(zone: string | null, availableOnly: boolean): Promise<any[]> {
+  private async locationGetAll(
+    zone: string | null,
+    availableOnly: boolean,
+    perPage: number,
+    offset: number,
+  ): Promise<any[]> {
     const where = ['lm.is_active = 1'];
     const params: unknown[] = [];
     if (zone) {
       params.push(zone);
       where.push(`lm.zone = $${params.length}`);
     }
+    if (availableOnly) {
+      where.push('COALESCE(occ.occupied_count, 0) = 0');
+    }
+    params.push(perPage, offset);
     const r = await this.db.query(
       `SELECT lm.*,
-              COUNT(sl.id) as occupied_pallets,
-              SUM(CASE WHEN sl.status = 'Available' THEN sl.quantity ELSE 0 END) as current_qty,
-              MAX(sl2.batch_number) as current_batch,
-              MAX(sl2.stock_id) as stock_id,
-              CASE WHEN COUNT(CASE WHEN sl.status = 'Available' THEN 1 END) > 0 THEN 'Occupied' ELSE 'Available' END AS availability
+              COALESCE(occ.occupied_pallets, 0) as occupied_pallets,
+              COALESCE(occ.current_qty, 0) as current_qty,
+              lat.batch_number as current_batch,
+              lat.stock_id as stock_id,
+              CASE WHEN COALESCE(occ.occupied_count, 0) > 0 THEN 'Occupied' ELSE 'Available' END AS availability
        FROM location_master lm
-       LEFT JOIN stock_locations sl ON sl.location_code = lm.location_code
-         AND sl.status IN ('Available','Reserved')
-       LEFT JOIN stock_locations sl2 ON sl2.id = (
-         SELECT id FROM stock_locations
-         WHERE location_code = lm.location_code AND status IN ('Available','Reserved')
-         ORDER BY id DESC LIMIT 1
-       )
+       LEFT JOIN LATERAL (
+         SELECT COUNT(sl.id)::int AS occupied_pallets,
+                SUM(CASE WHEN sl.status = 'Available' THEN sl.quantity ELSE 0 END) AS current_qty,
+                COUNT(CASE WHEN sl.status = 'Available' THEN 1 END)::int AS occupied_count
+         FROM stock_locations sl
+         WHERE sl.location_code = lm.location_code
+           AND sl.status IN ('Available','Reserved')
+       ) occ ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT sl2.batch_number, sl2.stock_id
+         FROM stock_locations sl2
+         WHERE sl2.location_code = lm.location_code
+           AND sl2.status IN ('Available','Reserved')
+         ORDER BY sl2.id DESC
+         LIMIT 1
+       ) lat ON TRUE
        WHERE ${where.join(' AND ')}
-       GROUP BY lm.id
-       ${availableOnly ? 'HAVING availability = \'Available\'' : ''}
-       ORDER BY lm.aisle, lm.rack, lm.row_name, lm.position`,
+       ORDER BY lm.aisle, lm.rack, lm.row_name, lm.position
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
     return r.rows;
+  }
+
+  private async countLocations(zone: string | null, availableOnly: boolean): Promise<number> {
+    const where = ['lm.is_active = 1'];
+    const params: unknown[] = [];
+    if (zone) {
+      params.push(zone);
+      where.push(`lm.zone = $${params.length}`);
+    }
+    if (availableOnly) {
+      where.push(
+        'NOT EXISTS (SELECT 1 FROM stock_locations slx WHERE slx.location_code = lm.location_code AND slx.status = \'Available\')',
+      );
+    }
+    const r = await this.db.query(
+      `SELECT COUNT(*)::int as c FROM location_master lm WHERE ${where.join(' AND ')}`,
+      params,
+    );
+    return r.rows[0].c;
   }
 
   private async locationAll(_ctx: RequestContext): Promise<Q> {

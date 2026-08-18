@@ -4,7 +4,7 @@ import { fmtNum } from '@/lib/format';
 import { useToast } from '@/components/Toast';
 import { Card } from '@/components/Card';
 import Spinner from '@/components/Spinner';
-import Rack3D, { Bin3D, ZONE_COLORS } from '@/components/Rack3D';
+import Rack3D, { Bin3D, ZONE_COLORS, FUNCTION_COLORS } from '@/components/Rack3D';
 
 const LEVELS = ['A', 'B', 'C', 'D', 'E'];
 const AISLES = ['CA', 'CB', 'CC', 'CD', 'CE', 'CF', 'CG'];
@@ -219,10 +219,10 @@ export default function RackViews({ tab }: { tab: 'rackmap' | 'rack3d' }) {
       title="Visualisasi Rack 3D"
       actions={
         <div className="flex items-center gap-2 text-[11px]">
-          {Object.entries(ZONE_COLORS).map(([z, c]) => (
-            <span key={z} className="inline-flex items-center gap-1">
+          {Object.entries(FUNCTION_COLORS).map(([f, c]) => (
+            <span key={f} className="inline-flex items-center gap-1">
               <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: c }} />
-              <span className="text-gray-500">{z}</span>
+              <span className="text-gray-500">{f === 'PICK_FACE' ? 'PICK FACE' : f === 'RESERVE' ? 'BULK' : f}</span>
             </span>
           ))}
           <span className="inline-flex items-center gap-1">

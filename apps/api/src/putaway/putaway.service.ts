@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { DbService } from '../database/db.service';
 import { ApiException } from '../common/api-exception';
 import { deriveUppFromPackSize, palletFunctionFor, isFullPallet } from '../common/pallet';
@@ -6,6 +6,7 @@ import { insertStockLocation } from '../common/stock-locations';
 import { generateNumber, DbLike } from '../common/number-gen';
 import { todayCompact } from '../common/date-util';
 import { LpnLabelData } from './label-printer.service';
+import { InboundService } from '../inbound/inbound.service';
 
 const SPECIAL_LOCS = ['QUA_SHELL', 'STAGING', 'UNALLOCATED'];
 const LEVEL_HEIGHT: Record<string, number> = { A: 1, B: 2, C: 3, D: 4, E: 5 };
@@ -64,7 +65,11 @@ interface BlockRow {
 
 @Injectable()
 export class PutawayService {
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    @Inject(forwardRef(() => InboundService))
+    private readonly inbound: InboundService,
+  ) {}
 
   private levelHeight(level: string): number {
     return LEVEL_HEIGHT[level?.toUpperCase()] ?? 0;
@@ -962,12 +967,26 @@ export class PutawayService {
    * Finish the task: write every Done pallet into stock_locations (shared
    * insertStockLocation — same pallet_function derivation as everywhere else),
    * then mark the task Completed with labour fields. All rows must be Done.
+   *
+   * Auto-finalize (bridges the putaway flow to the inbound item status flow):
+   * once the task is Completed, every inbound item linked to the task's pallets
+   * is advanced to ATP via InboundService.changeItemStatus — the SAME routine
+   * the desktop InboundDetail scan flow uses — as long as the item has no
+   * remaining Pending pallets in ANY task. When the inbound then has no open
+   * tasks and every item is ATP/Unserviceable, the inbound is auto-completed,
+   * so a fully put-away inbound confirms itself without the operator manually
+   * flipping item statuses to ATP.
    */
-  async completeTask(taskId: number, userId: number): Promise<{ task_number: string; pallets: number; quantity: number }> {
+  async completeTask(
+    taskId: number,
+    userId: number,
+  ): Promise<{ task_number: string; pallets: number; quantity: number; items_advanced: number; inbound_completed: boolean }> {
     const t = await this.db.query(`SELECT * FROM putaway_tasks WHERE id = $1`, [taskId]);
     const task = t.rows[0];
     if (!task) throw ApiException.notFound('Putaway task tidak ditemukan.');
-    if (task.status === 'Completed') return { task_number: task.task_number, pallets: 0, quantity: 0 };
+    if (task.status === 'Completed') {
+      return { task_number: task.task_number, pallets: 0, quantity: 0, items_advanced: 0, inbound_completed: false };
+    }
     if (task.status === 'Cancelled') throw ApiException.conflict('Task sudah dibatalkan.');
 
     const pending = await this.db.query(
@@ -1013,7 +1032,48 @@ export class PutawayService {
       );
     });
 
-    return { task_number: task.task_number, pallets: done.rows.length, quantity: done.rows.reduce((a: number, r: any) => a + Number(r.quantity ?? 0), 0) };
+    // Auto-finalize the inbound: advance each fully-put-away item to ATP, then
+    // auto-complete the inbound when every item is done and no tasks are open.
+    const inboundOrderId = task.inbound_order_id ? Number(task.inbound_order_id) : null;
+    let itemsAdvanced = 0;
+    let inboundCompleted = false;
+    if (inboundOrderId) {
+      const itemIds = new Set<number>(
+        done.rows
+          .map((r: any) => (r.inbound_item_id == null ? null : Number(r.inbound_item_id)))
+          .filter((v: number | null): v is number => v != null),
+      );
+      for (const itemId of itemIds) {
+        const remaining = await this.db.query(
+          `SELECT COUNT(*)::int AS c FROM putaway_task_items WHERE inbound_item_id = $1 AND status = 'Pending'`,
+          [itemId],
+        );
+        if (Number(remaining.rows[0].c ?? 0) === 0) {
+          await this.inbound.changeItemStatus(itemId, 'ATP', userId);
+          itemsAdvanced++;
+        }
+      }
+      const openTasks = await this.openTaskNumbers(inboundOrderId);
+      if (openTasks.length === 0) {
+        const pendingItems = await this.db.query(
+          `SELECT COUNT(*)::int AS c FROM inbound_items
+            WHERE inbound_order_id = $1 AND in_process_status NOT IN ('ATP','Unserviceable')`,
+          [inboundOrderId],
+        );
+        if (Number(pendingItems.rows[0].c ?? 0) === 0) {
+          await this.inbound.complete(inboundOrderId);
+          inboundCompleted = true;
+        }
+      }
+    }
+
+    return {
+      task_number: task.task_number,
+      pallets: done.rows.length,
+      quantity: done.rows.reduce((a: number, r: any) => a + Number(r.quantity ?? 0), 0),
+      items_advanced: itemsAdvanced,
+      inbound_completed: inboundCompleted,
+    };
   }
 
   /** Cancel a Pending/In Progress task (marks its open rows Cancelled). */
